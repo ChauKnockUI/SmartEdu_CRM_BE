@@ -1,0 +1,52 @@
+{
+  "name": "finance-service",
+  "version": "1.0.0",
+  "description": "Finance & Payment Service for EduCRM",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint src/**/*.js",
+    "lint:fix": "eslint src/**/*.js --fix",
+    "migrate": "node scripts/migrate.js"
+  },
+  "keywords": ["finance", "payments", "billing", "invoices", "microservices"],
+  "author": "EduCRM Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "pg": "^8.11.3",
+    "sequelize": "^6.33.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.0.0",
+    "compression": "^1.7.4",
+    "morgan": "^1.10.0",
+    "dotenv": "^16.3.1",
+    "redis": "^4.6.8",
+    "joi": "^17.9.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "axios": "^1.5.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "moment": "^2.29.4",
+    "uuid": "^9.0.1",
+    "stripe": "^13.0.0",
+    "paypal-rest-sdk": "^1.8.1",
+    "pdfkit": "^0.13.0",
+    "currency.js": "^2.0.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "eslint": "^8.50.0",
+    "@eslint/js": "^0.0.0",
+    "sequelize-cli": "^6.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
