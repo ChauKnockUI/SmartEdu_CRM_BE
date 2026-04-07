@@ -1,16 +1,14 @@
-import express from 'express';
-import cors from 'cors';
+import { app } from './app';
+import { connectDB } from './database/db';
 
-const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json());
+const startServer = async () => {
+  await connectDB();
 
-app.get('/health', (req, res) => {
-  res.json({ message: 'Server is running' });
-});
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running at http://localhost:${PORT}`);
+  });
+};
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+startServer();
