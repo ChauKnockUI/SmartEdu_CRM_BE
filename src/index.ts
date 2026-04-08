@@ -1,14 +1,25 @@
+import 'dotenv/config';
 import { app } from './app';
-import { connectDB } from './database/db';
+import { connectDB, sequelize } from './database/db';
+import './models/index';
 
 const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
-  await connectDB();
+  try {
+    await connectDB();
 
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running at http://localhost:${PORT}`);
-  });
+    await sequelize.sync({ alter: true }); // 🔥 tạo bảng
+    console.log("✅ All tables created!");
+    console.log(sequelize.models);
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running at http://localhost:${PORT}`);
+    });
+
+  } catch (err) {
+    console.error("❌ Error starting server:", err);
+  }
 };
 
 startServer();
