@@ -4,6 +4,7 @@
     "password": "123456",
     "database": "smartedu_crm",
     "host": "127.0.0.1",
-    "dialect": "postgres"
+    "dialect": "postgres",
+    "schema": "public"
   }
 }
