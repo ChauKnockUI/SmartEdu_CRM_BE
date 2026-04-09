@@ -9,57 +9,45 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ============================================
-// AUTH & USER MANAGEMENT
-// ============================================
-
 model User {
-  id            Int      @id @default(autoincrement())
-  email         String   @unique @db.VarChar(255)
-  password_hash String   @db.VarChar(255)
-  full_name     String   @db.VarChar(255)
-  phone         String?  @db.VarChar(20)
-  role          UserRole @default(sale)
-  avatar_url    String?  @db.VarChar(500)
-  is_active     Boolean  @default(true)
-  createdAt     DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  assignedLeads  Lead[]         @relation("LeadAssignee")
-  leadActivities LeadActivity[]
-  student        Student?
-  teacher        Teacher?
-  createdPayments Payment[]     @relation("PaymentCreator")
+  id              Int            @id @default(autoincrement())
+  email           String         @unique @db.VarChar(255)
+  password_hash   String         @db.VarChar(255)
+  full_name       String         @db.VarChar(255)
+  phone           String?        @db.VarChar(20)
+  role            UserRole       @default(sale)
+  avatar_url      String?        @db.VarChar(500)
+  is_active       Boolean        @default(true)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
+  leadActivities  LeadActivity[]
+  assignedLeads   Lead[]         @relation("LeadAssignee")
+  createdPayments Payment[]      @relation("PaymentCreator")
+  student         Student?
+  teacher         Teacher?
 
   @@index([role])
   @@index([is_active])
   @@map("users")
 }
 
-// ============================================
-// CRM / LEAD MANAGEMENT
-// ============================================
-
 model Lead {
-  id                Int         @id @default(autoincrement())
-  full_name         String      @db.VarChar(255)
-  phone             String?     @db.VarChar(20)
-  email             String?     @db.VarChar(255)
-  source            LeadSource  @default(other)
-  status            LeadStatus  @default(new)
+  id                Int            @id @default(autoincrement())
+  full_name         String         @db.VarChar(255)
+  phone             String?        @db.VarChar(20)
+  email             String?        @db.VarChar(255)
+  source            LeadSource     @default(other)
+  status            LeadStatus     @default(new)
   ai_score          Float?
-  ai_recommendation String?     @db.Text
+  ai_recommendation String?
   assigned_to       Int?
-  notes             String?     @db.Text
-  last_contacted    DateTime?   @db.Timestamptz(6)
-  createdAt         DateTime    @default(now()) @db.Timestamptz(6)
-  updatedAt         DateTime    @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  assignedUser User?          @relation("LeadAssignee", fields: [assigned_to], references: [id], onDelete: SetNull)
-  activities   LeadActivity[]
-  student      Student?
+  notes             String?
+  last_contacted    DateTime?      @db.Timestamptz(6)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(6)
+  activities        LeadActivity[]
+  assignedUser      User?          @relation("LeadAssignee", fields: [assigned_to], references: [id])
+  student           Student?
 
   @@index([status])
   @@index([source])
@@ -73,23 +61,17 @@ model LeadActivity {
   lead_id   Int
   user_id   Int?
   type      LeadActivityType
-  content   String?          @db.Text
+  content   String?
   createdAt DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt DateTime         @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  lead Lead  @relation(fields: [lead_id], references: [id], onDelete: Cascade)
-  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  lead      Lead             @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  user      User?            @relation(fields: [user_id], references: [id])
 
   @@index([lead_id])
   @@index([user_id])
   @@index([type])
   @@map("lead_activities")
 }
-
-// ============================================
-// STUDENT MANAGEMENT
-// ============================================
 
 model Student {
   id                 Int               @id @default(autoincrement())
@@ -105,23 +87,17 @@ model Student {
   dropout_risk_level DropoutRiskLevel?
   createdAt          DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  user             User?              @relation(fields: [user_id], references: [id], onDelete: SetNull)
-  lead             Lead?              @relation(fields: [lead_id], references: [id], onDelete: SetNull)
-  classEnrollments ClassEnrollment[]
-  attendances      Attendance[]
-  testResults      TestResult[]
-  payments         Payment[]
+  attendances        Attendance[]
+  classEnrollments   ClassEnrollment[]
+  payments           Payment[]
+  lead               Lead?             @relation(fields: [lead_id], references: [id])
+  user               User?             @relation(fields: [user_id], references: [id])
+  testResults        TestResult[]
 
   @@index([status])
   @@index([enrollment_date])
   @@map("students")
 }
-
-// ============================================
-// TEACHER MANAGEMENT
-// ============================================
 
 model Teacher {
   id             Int         @id @default(autoincrement())
@@ -134,59 +110,49 @@ model Teacher {
   is_active      Boolean     @default(true)
   createdAt      DateTime    @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime    @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  user      User?      @relation(fields: [user_id], references: [id], onDelete: SetNull)
-  classes   Class[]
-  schedules Schedule[]
+  classes        Class[]
+  schedules      Schedule[]
+  user           User?       @relation(fields: [user_id], references: [id])
 
   @@index([is_active])
   @@map("teachers")
 }
 
-// ============================================
-// COURSE & CLASS MANAGEMENT
-// ============================================
-
 model Course {
   id             Int      @id @default(autoincrement())
   name           String   @db.VarChar(255)
-  description    String?  @db.Text
+  description    String?
   total_sessions Int?
   fee            Decimal? @db.Decimal(15, 2)
   duration_weeks Int?
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  classes Class[]
+  classes        Class[]
 
   @@map("courses")
 }
 
 model Class {
-  id            Int          @id @default(autoincrement())
-  name          String       @db.VarChar(255)
-  course_id     Int?
-  teacher_id    Int?
-  room_id       Int?
-  status        ClassStatus  @default(upcoming)
-  start_date    DateTime?    @db.Date
-  end_date      DateTime?    @db.Date
-  schedule_days String?      @db.VarChar(255)
-  schedule_time String?      @db.VarChar(255)
-  max_students  Int?
-  createdAt     DateTime     @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime     @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  course           Course?           @relation(fields: [course_id], references: [id], onDelete: SetNull)
-  teacher          Teacher?          @relation(fields: [teacher_id], references: [id], onDelete: SetNull)
-  room             Room?             @relation(fields: [room_id], references: [id], onDelete: SetNull)
+  id               Int               @id @default(autoincrement())
+  name             String            @db.VarChar(255)
+  course_id        Int?
+  teacher_id       Int?
+  room_id          Int?
+  status           ClassStatus       @default(upcoming)
+  start_date       DateTime?         @db.Date
+  end_date         DateTime?         @db.Date
+  schedule_days    String?           @db.VarChar(255)
+  schedule_time    String?           @db.VarChar(255)
+  max_students     Int?
+  createdAt        DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
   classEnrollments ClassEnrollment[]
+  course           Course?           @relation(fields: [course_id], references: [id])
+  room             Room?             @relation(fields: [room_id], references: [id])
+  teacher          Teacher?          @relation(fields: [teacher_id], references: [id])
+  payments         Payment[]
   schedules        Schedule[]
   tests            Test[]
-  payments         Payment[]
 
   @@index([status])
   @@index([course_id])
@@ -202,30 +168,22 @@ model ClassEnrollment {
   status     EnrollmentStatus @default(active)
   createdAt  DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime         @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  class   Class   @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class      Class            @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  student    Student          @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@unique([class_id, student_id])
   @@index([student_id])
   @@map("class_enrollments")
 }
 
-// ============================================
-// SCHEDULING & ATTENDANCE
-// ============================================
-
 model Room {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique @db.VarChar(255)
+  id        Int        @id @default(autoincrement())
+  name      String     @unique @db.VarChar(255)
   capacity  Int?
-  equipment String?  @db.Text
-  is_active Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @db.Timestamptz(6)
-
-  // Relations
+  equipment String?
+  is_active Boolean    @default(true)
+  createdAt DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @db.Timestamptz(6)
   classes   Class[]
   schedules Schedule[]
 
@@ -233,23 +191,21 @@ model Room {
 }
 
 model Schedule {
-  id         Int            @id @default(autoincrement())
-  class_id   Int?
-  teacher_id Int?
-  room_id    Int?
-  date       DateTime       @db.Date
-  start_time DateTime?      @db.Time(6)
-  end_time   DateTime?      @db.Time(6)
-  status     ScheduleStatus @default(scheduled)
-  notes      String?        @db.Text
-  createdAt  DateTime       @default(now()) @db.Timestamptz(6)
-  updatedAt  DateTime       @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  class       Class?       @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  teacher     Teacher?     @relation(fields: [teacher_id], references: [id], onDelete: SetNull)
-  room        Room?        @relation(fields: [room_id], references: [id], onDelete: SetNull)
+  id          Int            @id @default(autoincrement())
+  class_id    Int?
+  teacher_id  Int?
+  room_id     Int?
+  date        DateTime       @db.Date
+  start_time  DateTime?      @db.Time(6)
+  end_time    DateTime?      @db.Time(6)
+  status      ScheduleStatus @default(scheduled)
+  notes       String?
+  createdAt   DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime       @updatedAt @db.Timestamptz(6)
   attendances Attendance[]
+  class       Class?         @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  room        Room?          @relation(fields: [room_id], references: [id])
+  teacher     Teacher?       @relation(fields: [teacher_id], references: [id])
 
   @@index([date])
   @@index([class_id])
@@ -263,36 +219,28 @@ model Attendance {
   schedule_id Int
   student_id  Int
   status      AttendanceStatus @default(present)
-  notes       String?          @db.Text
+  notes       String?
   createdAt   DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime         @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  schedule Schedule @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
-  student  Student  @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  schedule    Schedule         @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  student     Student          @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@unique([schedule_id, student_id])
   @@index([student_id])
   @@map("attendances")
 }
 
-// ============================================
-// ASSESSMENT
-// ============================================
-
 model Test {
-  id        Int      @id @default(autoincrement())
-  class_id  Int
-  name      String   @db.VarChar(255)
-  type      TestType
-  max_score Float?
-  test_date DateTime? @db.Date
-  createdAt DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  class       Class        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  id          Int          @id @default(autoincrement())
+  class_id    Int
+  name        String       @db.VarChar(255)
+  type        TestType
+  max_score   Float?
+  test_date   DateTime?    @db.Date
+  createdAt   DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
   testResults TestResult[]
+  class       Class        @relation(fields: [class_id], references: [id], onDelete: Cascade)
 
   @@index([class_id])
   @@index([test_date])
@@ -304,22 +252,16 @@ model TestResult {
   test_id    Int
   student_id Int
   score      Float?
-  feedback   String?  @db.Text
+  feedback   String?
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  test    Test    @relation(fields: [test_id], references: [id], onDelete: Cascade)
-  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  student    Student  @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  test       Test     @relation(fields: [test_id], references: [id], onDelete: Cascade)
 
   @@unique([test_id, student_id])
   @@index([student_id])
   @@map("test_results")
 }
-
-// ============================================
-// FINANCE
-// ============================================
 
 model Payment {
   id           Int           @id @default(autoincrement())
@@ -329,15 +271,13 @@ model Payment {
   payment_date DateTime?     @db.Date
   method       PaymentMethod @default(cash)
   status       PaymentStatus @default(pending)
-  notes        String?       @db.Text
+  notes        String?
   created_by   Int?
   createdAt    DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime      @updatedAt @db.Timestamptz(6)
-
-  // Relations
-  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  class   Class?  @relation(fields: [class_id], references: [id], onDelete: SetNull)
-  creator User?   @relation("PaymentCreator", fields: [created_by], references: [id], onDelete: SetNull)
+  class        Class?        @relation(fields: [class_id], references: [id])
+  creator      User?         @relation("PaymentCreator", fields: [created_by], references: [id])
+  student      Student       @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([student_id])
   @@index([class_id])
@@ -345,10 +285,6 @@ model Payment {
   @@index([payment_date])
   @@map("payments")
 }
-
-// ============================================
-// AI PREDICTIONS
-// ============================================
 
 model AIPrediction {
   id              Int            @id @default(autoincrement())
@@ -363,10 +299,6 @@ model AIPrediction {
   @@index([reference_id])
   @@map("ai_predictions")
 }
-
-// ============================================
-// ENUMS
-// ============================================
 
 enum UserRole {
   admin
