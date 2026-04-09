@@ -4,279 +4,378 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-model SequelizeMeta {
-  name String @id @db.VarChar(255)
+// ============================================
+// AUTH & USER MANAGEMENT
+// ============================================
+
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique @db.VarChar(255)
+  password_hash String   @db.VarChar(255)
+  full_name     String   @db.VarChar(255)
+  phone         String?  @db.VarChar(20)
+  role          UserRole @default(sale)
+  avatar_url    String?  @db.VarChar(500)
+  is_active     Boolean  @default(true)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  assignedLeads  Lead[]         @relation("LeadAssignee")
+  leadActivities LeadActivity[]
+  student        Student?
+  teacher        Teacher?
+  createdPayments Payment[]     @relation("PaymentCreator")
+
+  @@index([role])
+  @@index([is_active])
+  @@map("users")
 }
 
-model AIPredictions {
-  id              Int                                @id @default(autoincrement())
-  prediction_type enum_AIPredictions_prediction_type
-  reference_id    Int?
-  input_data      Json?
-  result_data     Json?
-  createdAt       DateTime                           @db.Timestamptz(6)
-  updatedAt       DateTime                           @db.Timestamptz(6)
+// ============================================
+// CRM / LEAD MANAGEMENT
+// ============================================
+
+model Lead {
+  id                Int         @id @default(autoincrement())
+  full_name         String      @db.VarChar(255)
+  phone             String?     @db.VarChar(20)
+  email             String?     @db.VarChar(255)
+  source            LeadSource  @default(other)
+  status            LeadStatus  @default(new)
+  ai_score          Float?
+  ai_recommendation String?     @db.Text
+  assigned_to       Int?
+  notes             String?     @db.Text
+  last_contacted    DateTime?   @db.Timestamptz(6)
+  createdAt         DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  assignedUser User?          @relation("LeadAssignee", fields: [assigned_to], references: [id], onDelete: SetNull)
+  activities   LeadActivity[]
+  student      Student?
+
+  @@index([status])
+  @@index([source])
+  @@index([assigned_to])
+  @@index([createdAt])
+  @@map("leads")
 }
 
-model Attendances {
-  id          Int                     @id @default(autoincrement())
-  schedule_id Int
-  student_id  Int
-  status      enum_Attendances_status @default(present)
-  notes       String?
-  createdAt   DateTime                @db.Timestamptz(6)
-  updatedAt   DateTime                @db.Timestamptz(6)
-  Schedules   Schedules               @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
-  Students    Students                @relation(fields: [student_id], references: [id], onDelete: Cascade)
-}
-
-model ClassEnrollments {
-  id         Int                           @id @default(autoincrement())
-  class_id   Int
-  student_id Int
-  status     enum_ClassEnrollments_status? @default(active)
-  createdAt  DateTime                      @db.Timestamptz(6)
-  updatedAt  DateTime                      @db.Timestamptz(6)
-  Classes    Classes                       @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  Students   Students                      @relation(fields: [student_id], references: [id], onDelete: Cascade)
-
-  @@unique([class_id, student_id])
-}
-
-model Classes {
-  id               Int                  @id @default(autoincrement())
-  name             String               @db.VarChar(255)
-  course_id        Int?
-  teacher_id       Int?
-  room_id          Int?
-  status           enum_Classes_status? @default(upcoming)
-  start_date       DateTime?            @db.Date
-  end_date         DateTime?            @db.Date
-  schedule_days    String?              @db.VarChar(255)
-  schedule_time    String?              @db.VarChar(255)
-  max_students     Int?
-  createdAt        DateTime             @db.Timestamptz(6)
-  updatedAt        DateTime             @db.Timestamptz(6)
-  ClassEnrollments ClassEnrollments[]
-  Courses          Courses?             @relation(fields: [course_id], references: [id], onDelete: Cascade)
-  Rooms            Rooms?               @relation(fields: [room_id], references: [id], onDelete: Cascade)
-  Teachers         Teachers?            @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
-  Payments         Payments[]
-  Schedules        Schedules[]
-  Tests            Tests[]
-}
-
-model Courses {
-  id             Int       @id @default(autoincrement())
-  name           String    @db.VarChar(255)
-  description    String?
-  total_sessions Int?
-  fee            Decimal?  @db.Decimal(15, 2)
-  duration_weeks Int?
-  createdAt      DateTime  @db.Timestamptz(6)
-  updatedAt      DateTime  @db.Timestamptz(6)
-  Classes        Classes[]
-}
-
-model LeadActivities {
-  id        Int                      @id @default(autoincrement())
+model LeadActivity {
+  id        Int              @id @default(autoincrement())
   lead_id   Int
   user_id   Int?
-  type      enum_LeadActivities_type
-  content   String?
-  createdAt DateTime                 @db.Timestamptz(6)
-  updatedAt DateTime                 @db.Timestamptz(6)
-  Leads     Leads                    @relation(fields: [lead_id], references: [id], onDelete: Cascade)
-  Users     Users?                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  type      LeadActivityType
+  content   String?          @db.Text
+  createdAt DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime         @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  lead Lead  @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([lead_id])
+  @@index([user_id])
+  @@index([type])
+  @@map("lead_activities")
 }
 
-model Leads {
-  id                Int                @id @default(autoincrement())
-  full_name         String             @db.VarChar(255)
-  phone             String?            @db.VarChar(255)
-  email             String?            @db.VarChar(255)
-  source            enum_Leads_source? @default(other)
-  status            enum_Leads_status? @default(new)
-  ai_score          Float?
-  ai_recommendation String?
-  assigned_to       Int?
-  notes             String?
-  last_contacted    DateTime?          @db.Timestamptz(6)
-  createdAt         DateTime           @db.Timestamptz(6)
-  updatedAt         DateTime           @db.Timestamptz(6)
-  LeadActivities    LeadActivities[]
-  Users             Users?             @relation(fields: [assigned_to], references: [id], onDelete: Cascade)
-  Students          Students[]
-}
+// ============================================
+// STUDENT MANAGEMENT
+// ============================================
 
-model Payments {
-  id           Int                   @id @default(autoincrement())
-  student_id   Int
-  class_id     Int?
-  amount       Decimal               @db.Decimal(15, 2)
-  payment_date DateTime?             @db.Date
-  method       enum_Payments_method? @default(cash)
-  status       enum_Payments_status? @default(pending)
-  notes        String?
-  created_by   Int?
-  createdAt    DateTime              @db.Timestamptz(6)
-  updatedAt    DateTime              @db.Timestamptz(6)
-  Classes      Classes?              @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  Users        Users?                @relation(fields: [created_by], references: [id], onDelete: Cascade)
-  Students     Students              @relation(fields: [student_id], references: [id], onDelete: Cascade)
-}
-
-model Rooms {
-  id        Int         @id @default(autoincrement())
-  name      String      @db.VarChar(255)
-  capacity  Int?
-  equipment String?
-  is_active Boolean?    @default(true)
-  createdAt DateTime    @db.Timestamptz(6)
-  updatedAt DateTime    @db.Timestamptz(6)
-  Classes   Classes[]
-  Schedules Schedules[]
-}
-
-model Schedules {
-  id          Int                    @id @default(autoincrement())
-  class_id    Int?
-  teacher_id  Int?
-  room_id     Int?
-  date        DateTime               @db.Date
-  start_time  DateTime?              @db.Time(6)
-  end_time    DateTime?              @db.Time(6)
-  status      enum_Schedules_status? @default(scheduled)
-  notes       String?
-  createdAt   DateTime               @db.Timestamptz(6)
-  updatedAt   DateTime               @db.Timestamptz(6)
-  Attendances Attendances[]
-  Classes     Classes?               @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  Rooms       Rooms?                 @relation(fields: [room_id], references: [id], onDelete: Cascade)
-  Teachers    Teachers?              @relation(fields: [teacher_id], references: [id], onDelete: Cascade)
-}
-
-model Students {
-  id                 Int                               @id @default(autoincrement())
-  user_id            Int?
-  lead_id            Int?
-  full_name          String                            @db.VarChar(255)
-  phone              String?                           @db.VarChar(255)
-  email              String?                           @db.VarChar(255)
-  dob                DateTime?                         @db.Date
-  status             enum_Students_status?             @default(active)
-  enrollment_date    DateTime?                         @db.Date
+model Student {
+  id                 Int               @id @default(autoincrement())
+  user_id            Int?              @unique
+  lead_id            Int?              @unique
+  full_name          String            @db.VarChar(255)
+  phone              String?           @db.VarChar(20)
+  email              String?           @unique @db.VarChar(255)
+  dob                DateTime?         @db.Date
+  status             StudentStatus     @default(active)
+  enrollment_date    DateTime?         @db.Date
   dropout_risk       Float?
-  dropout_risk_level enum_Students_dropout_risk_level?
-  createdAt          DateTime                          @db.Timestamptz(6)
-  updatedAt          DateTime                          @db.Timestamptz(6)
-  Attendances        Attendances[]
-  ClassEnrollments   ClassEnrollments[]
-  Payments           Payments[]
-  Leads              Leads?                            @relation(fields: [lead_id], references: [id], onDelete: Cascade)
-  Users              Users?                            @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  TestResults        TestResults[]
+  dropout_risk_level DropoutRiskLevel?
+  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  user             User?              @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  lead             Lead?              @relation(fields: [lead_id], references: [id], onDelete: SetNull)
+  classEnrollments ClassEnrollment[]
+  attendances      Attendance[]
+  testResults      TestResult[]
+  payments         Payment[]
+
+  @@index([status])
+  @@index([enrollment_date])
+  @@map("students")
 }
 
-model Teachers {
-  id             Int                 @id @default(autoincrement())
-  user_id        Int?
-  full_name      String              @db.VarChar(255)
-  phone          String?             @db.VarChar(255)
-  email          String?             @db.VarChar(255)
-  type           enum_Teachers_type? @default(full_time)
-  specialization String?             @db.VarChar(255)
-  is_active      Boolean?            @default(true)
-  createdAt      DateTime            @db.Timestamptz(6)
-  updatedAt      DateTime            @db.Timestamptz(6)
-  Classes        Classes[]
-  Schedules      Schedules[]
-  Users          Users?              @relation(fields: [user_id], references: [id], onDelete: Cascade)
+// ============================================
+// TEACHER MANAGEMENT
+// ============================================
+
+model Teacher {
+  id             Int         @id @default(autoincrement())
+  user_id        Int?        @unique
+  full_name      String      @db.VarChar(255)
+  phone          String?     @db.VarChar(20)
+  email          String?     @unique @db.VarChar(255)
+  type           TeacherType @default(full_time)
+  specialization String?     @db.VarChar(255)
+  is_active      Boolean     @default(true)
+  createdAt      DateTime    @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime    @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  user      User?      @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  classes   Class[]
+  schedules Schedule[]
+
+  @@index([is_active])
+  @@map("teachers")
 }
 
-model TestResults {
+// ============================================
+// COURSE & CLASS MANAGEMENT
+// ============================================
+
+model Course {
+  id             Int      @id @default(autoincrement())
+  name           String   @db.VarChar(255)
+  description    String?  @db.Text
+  total_sessions Int?
+  fee            Decimal? @db.Decimal(15, 2)
+  duration_weeks Int?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  classes Class[]
+
+  @@map("courses")
+}
+
+model Class {
+  id            Int          @id @default(autoincrement())
+  name          String       @db.VarChar(255)
+  course_id     Int?
+  teacher_id    Int?
+  room_id       Int?
+  status        ClassStatus  @default(upcoming)
+  start_date    DateTime?    @db.Date
+  end_date      DateTime?    @db.Date
+  schedule_days String?      @db.VarChar(255)
+  schedule_time String?      @db.VarChar(255)
+  max_students  Int?
+  createdAt     DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  course           Course?           @relation(fields: [course_id], references: [id], onDelete: SetNull)
+  teacher          Teacher?          @relation(fields: [teacher_id], references: [id], onDelete: SetNull)
+  room             Room?             @relation(fields: [room_id], references: [id], onDelete: SetNull)
+  classEnrollments ClassEnrollment[]
+  schedules        Schedule[]
+  tests            Test[]
+  payments         Payment[]
+
+  @@index([status])
+  @@index([course_id])
+  @@index([teacher_id])
+  @@index([room_id])
+  @@map("classes")
+}
+
+model ClassEnrollment {
+  id         Int              @id @default(autoincrement())
+  class_id   Int
+  student_id Int
+  status     EnrollmentStatus @default(active)
+  createdAt  DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime         @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class   Class   @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([class_id, student_id])
+  @@index([student_id])
+  @@map("class_enrollments")
+}
+
+// ============================================
+// SCHEDULING & ATTENDANCE
+// ============================================
+
+model Room {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique @db.VarChar(255)
+  capacity  Int?
+  equipment String?  @db.Text
+  is_active Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  classes   Class[]
+  schedules Schedule[]
+
+  @@map("rooms")
+}
+
+model Schedule {
+  id         Int            @id @default(autoincrement())
+  class_id   Int?
+  teacher_id Int?
+  room_id    Int?
+  date       DateTime       @db.Date
+  start_time DateTime?      @db.Time(6)
+  end_time   DateTime?      @db.Time(6)
+  status     ScheduleStatus @default(scheduled)
+  notes      String?        @db.Text
+  createdAt  DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime       @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class       Class?       @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  teacher     Teacher?     @relation(fields: [teacher_id], references: [id], onDelete: SetNull)
+  room        Room?        @relation(fields: [room_id], references: [id], onDelete: SetNull)
+  attendances Attendance[]
+
+  @@index([date])
+  @@index([class_id])
+  @@index([teacher_id])
+  @@index([room_id])
+  @@map("schedules")
+}
+
+model Attendance {
+  id          Int              @id @default(autoincrement())
+  schedule_id Int
+  student_id  Int
+  status      AttendanceStatus @default(present)
+  notes       String?          @db.Text
+  createdAt   DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  schedule Schedule @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
+  student  Student  @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([schedule_id, student_id])
+  @@index([student_id])
+  @@map("attendances")
+}
+
+// ============================================
+// ASSESSMENT
+// ============================================
+
+model Test {
+  id        Int      @id @default(autoincrement())
+  class_id  Int
+  name      String   @db.VarChar(255)
+  type      TestType
+  max_score Float?
+  test_date DateTime? @db.Date
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  class       Class        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  testResults TestResult[]
+
+  @@index([class_id])
+  @@index([test_date])
+  @@map("tests")
+}
+
+model TestResult {
   id         Int      @id @default(autoincrement())
   test_id    Int
   student_id Int
   score      Float?
-  feedback   String?
-  createdAt  DateTime @db.Timestamptz(6)
-  updatedAt  DateTime @db.Timestamptz(6)
-  Students   Students @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  Tests      Tests    @relation(fields: [test_id], references: [id], onDelete: Cascade)
+  feedback   String?  @db.Text
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  test    Test    @relation(fields: [test_id], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([test_id, student_id])
+  @@index([student_id])
+  @@map("test_results")
 }
 
-model Tests {
-  id          Int             @id @default(autoincrement())
-  class_id    Int
-  name        String          @db.VarChar(255)
-  type        enum_Tests_type
-  max_score   Float?
-  test_date   DateTime?       @db.Date
-  createdAt   DateTime        @db.Timestamptz(6)
-  updatedAt   DateTime        @db.Timestamptz(6)
-  TestResults TestResults[]
-  Classes     Classes         @relation(fields: [class_id], references: [id], onDelete: Cascade)
+// ============================================
+// FINANCE
+// ============================================
+
+model Payment {
+  id           Int           @id @default(autoincrement())
+  student_id   Int
+  class_id     Int?
+  amount       Decimal       @db.Decimal(15, 2)
+  payment_date DateTime?     @db.Date
+  method       PaymentMethod @default(cash)
+  status       PaymentStatus @default(pending)
+  notes        String?       @db.Text
+  created_by   Int?
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(6)
+
+  // Relations
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class   Class?  @relation(fields: [class_id], references: [id], onDelete: SetNull)
+  creator User?   @relation("PaymentCreator", fields: [created_by], references: [id], onDelete: SetNull)
+
+  @@index([student_id])
+  @@index([class_id])
+  @@index([status])
+  @@index([payment_date])
+  @@map("payments")
 }
 
-model Users {
-  id             Int              @id @default(autoincrement())
-  email          String           @unique @db.VarChar(255)
-  password_hash  String           @db.VarChar(255)
-  full_name      String           @db.VarChar(255)
-  phone          String?          @db.VarChar(255)
-  role           enum_Users_role  @default(staff)
-  avatar_url     String?          @db.VarChar(255)
-  is_active      Boolean?         @default(true)
-  createdAt      DateTime         @db.Timestamptz(6)
-  updatedAt      DateTime         @db.Timestamptz(6)
-  LeadActivities LeadActivities[]
-  Leads          Leads[]
-  Payments       Payments[]
-  Students       Students[]
-  Teachers       Teachers[]
+// ============================================
+// AI PREDICTIONS
+// ============================================
+
+model AIPrediction {
+  id              Int            @id @default(autoincrement())
+  prediction_type PredictionType
+  reference_id    Int?
+  input_data      Json?
+  result_data     Json?
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
+
+  @@index([prediction_type])
+  @@index([reference_id])
+  @@map("ai_predictions")
 }
 
-enum enum_AIPredictions_prediction_type {
-  lead_score
-  dropout_risk
-  revenue_forecast
+// ============================================
+// ENUMS
+// ============================================
+
+enum UserRole {
+  admin
+  sale
+  teacher
+  student
 }
 
-enum enum_Attendances_status {
-  present
-  absent
-  late
-  excused
-}
-
-enum enum_ClassEnrollments_status {
-  active
-  dropped
-  completed
-}
-
-enum enum_Classes_status {
-  upcoming
-  ongoing
-  completed
-  cancelled
-}
-
-enum enum_LeadActivities_type {
-  call
-  email
-  sms
-  meeting
-  note
-  status_change
-}
-
-enum enum_Leads_source {
+enum LeadSource {
   facebook
   zalo
   website
@@ -285,7 +384,7 @@ enum enum_Leads_source {
   other
 }
 
-enum enum_Leads_status {
+enum LeadStatus {
   new
   contacted
   interested
@@ -294,7 +393,67 @@ enum enum_Leads_status {
   lost
 }
 
-enum enum_Payments_method {
+enum LeadActivityType {
+  call
+  email
+  sms
+  meeting
+  note
+  status_change
+}
+
+enum StudentStatus {
+  active
+  inactive
+  graduated
+  dropped
+}
+
+enum DropoutRiskLevel {
+  low
+  medium
+  high
+}
+
+enum TeacherType {
+  full_time
+  part_time
+}
+
+enum ClassStatus {
+  upcoming
+  ongoing
+  completed
+  cancelled
+}
+
+enum EnrollmentStatus {
+  active
+  dropped
+  completed
+}
+
+enum ScheduleStatus {
+  scheduled
+  completed
+  cancelled
+}
+
+enum AttendanceStatus {
+  present
+  absent
+  late
+  excused
+}
+
+enum TestType {
+  quiz
+  midterm
+  final
+  assignment
+}
+
+enum PaymentMethod {
   cash
   bank_transfer
   momo
@@ -302,45 +461,14 @@ enum enum_Payments_method {
   other
 }
 
-enum enum_Payments_status {
+enum PaymentStatus {
   pending
   paid
   refunded
 }
 
-enum enum_Schedules_status {
-  scheduled
-  completed
-  cancelled
-}
-
-enum enum_Students_dropout_risk_level {
-  low
-  medium
-  high
-}
-
-enum enum_Students_status {
-  active
-  inactive
-  graduated
-  dropped
-}
-
-enum enum_Teachers_type {
-  full_time
-  part_time
-}
-
-enum enum_Tests_type {
-  quiz
-  midterm
-  final
-  assignment
-}
-
-enum enum_Users_role {
-  admin
-  staff
-  teacher
+enum PredictionType {
+  lead_score
+  dropout_risk
+  revenue_forecast
 }

@@ -1,26 +1,31 @@
-import { Sequelize } from 'sequelize';
+import { PrismaClient } from '../generated/prisma';
 
-const sequelize = new Sequelize(
-  process.env.DB_NAME!,
-  process.env.DB_USER!,
-  process.env.DB_PASSWORD!,
-  {
-    host: process.env.DB_HOST,
-    dialect: 'postgres',
-    define: {
-      schema: 'public', // 🔥 THÊM DÒNG NÀY
-    },
-  }
-);
+// Singleton pattern: tránh tạo nhiều connections trong development (hot reload)
+const globalForPrisma = global as unknown as { prisma: PrismaClient };
 
-const connectDB = async () => {
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    log:
+      process.env.NODE_ENV === 'development'
+        ? ['query', 'error', 'warn']
+        : ['error'],
+  });
+
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = prisma;
+}
+
+export const connectDB = async (): Promise<void> => {
   try {
-    await sequelize.authenticate();
-    console.log('✅ Database connected');
+    await prisma.$connect();
+    console.log('✅ Database connected (Prisma)');
   } catch (error) {
-    console.error('❌ Unable to connect:', error);
+    console.error('❌ Unable to connect to database:', error);
     process.exit(1);
   }
 };
 
-export { sequelize, connectDB };
+export const disconnectDB = async (): Promise<void> => {
+  await prisma.$disconnect();
+};

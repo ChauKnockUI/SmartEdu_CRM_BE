@@ -11,4 +11,8 @@ coverage/
 *.swp
 *.swo
 
-/src/generated/prisma
+# Prisma generated client
+/src/generated/
+
+# Config with credentials (dùng .env thay thế)
+config/
