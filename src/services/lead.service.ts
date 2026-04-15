@@ -69,7 +69,7 @@ export class LeadService {
 
         // 2. Xây dựng Sắp xếp (Order By)
         let orderBy: any;
-        
+
         if (sort_by === 'probability_score') {
             // Safe sort: Mặc định fallback thêm createdAt phòng khi aiScore null/gặp lỗi version Prisma
             orderBy = [
