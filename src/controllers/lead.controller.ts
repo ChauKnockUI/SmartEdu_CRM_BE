@@ -53,6 +53,46 @@ export class LeadController {
             });
         }
     }
+
+    /**
+     * Lấy chi tiết 1 Lead | GET /api/leads/:id
+     */
+    async getLeadById(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+
+            // Validate ID hợp lệ
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            const result = await leadService.getLeadById(Number(id));
+
+            if (!result) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead (Not found)'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: result // Đồng nhất chuẩn JSON response với GET /api/leads
+            });
+            
+        } catch (error: any) {
+            console.error('[LeadController] getLeadById error:', error);
+
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi lấy dữ liệu chi tiết Lead',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const leadController = new LeadController();

@@ -128,6 +128,51 @@ export class LeadService {
             }
         };
     }
+
+    /**
+     * Lấy thông tin chi tiết đầy đủ của một Lead theo ID
+     */
+    async getLeadById(id: number) {
+        const lead = await prisma.lead.findUnique({
+            where: { id },
+            include: {
+                // Join thông tin User được gán (Security: Cắt password)
+                assignedUser: {
+                    select: {
+                        id: true,
+                        full_name: true,
+                        email: true,
+                        avatar_url: true,
+                        role: true
+                    }
+                },
+                // Join Khóa học
+                course: true,
+                // Lấy 20 activities gần nhất để tránh phình to JSON
+                activities: {
+                    orderBy: { createdAt: 'desc' },
+                    take: 20
+                },
+                // Join điểm AI
+                aiScore: {
+                    select: {
+                        probability_score: true,
+                        recommendation: true,
+                        positive_factors: true,
+                        negative_factors: true
+                    }
+                }
+            }
+        });
+
+        if (!lead) return null;
+
+        // Trả format phẳng đồng nhất với API Get Details để Component FrontEnd được Optimize tái sử dụng logic UI cho cả List & Item.
+        return {
+            ...lead,
+            aiScore: lead.aiScore || null
+        };
+    }
 }
 
 export const leadService = new LeadService();
