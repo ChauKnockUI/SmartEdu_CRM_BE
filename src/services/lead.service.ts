@@ -1,8 +1,6 @@
-import { PrismaClient, Prisma, LeadStatus } from '../generated/prisma';
+import { Prisma, LeadStatus } from '../generated/prisma';
 import { leadScoringService } from './ai/leadScoring.service';
-
-const prisma = new PrismaClient();
-
+import { leadRepository } from '../repositories/lead.repository';
 export interface GetLeadsQuery {
     page?: number;
     limit?: number;
@@ -104,27 +102,8 @@ export class LeadService {
         // 3. Thực thi Query song song để đạt tốc độ tải Database cao
         // Promise.all giúp truy vấn count() và findMany() mượt mà cùng lúc.
         const [total, data] = await Promise.all([
-            prisma.lead.count({ where }),
-            prisma.lead.findMany({
-                where,
-                skip,
-                take: limit,
-                orderBy,
-                include: {
-                    // Cắt các trường nhạy cảm của người dùng (như password hash)
-                    assignedUser: {
-                        select: {
-                            id: true,
-                            full_name: true,
-                            email: true,
-                            avatar_url: true,
-                            role: true,
-                        }
-                    },
-                    // Fetch Data AI 1-1
-                    aiScore: true
-                }
-            })
+            leadRepository.count(where),
+            leadRepository.findMany(where, skip, limit, orderBy)
         ]);
 
         // 4. Normalize Data: Xử lý fallback cho Frontend nếu Lead chưa được chấm điểm AI
@@ -153,37 +132,7 @@ export class LeadService {
      * Lấy thông tin chi tiết đầy đủ của một Lead theo ID
      */
     async getLeadById(id: number) {
-        const lead = await prisma.lead.findUnique({
-            where: { id },
-            include: {
-                // Join thông tin User được gán (Security: Cắt password)
-                assignedUser: {
-                    select: {
-                        id: true,
-                        full_name: true,
-                        email: true,
-                        avatar_url: true,
-                        role: true
-                    }
-                },
-                // Join Khóa học
-                course: true,
-                // Lấy 20 activities gần nhất để tránh phình to JSON
-                activities: {
-                    orderBy: { createdAt: 'desc' },
-                    take: 20
-                },
-                // Join điểm AI
-                aiScore: {
-                    select: {
-                        probability_score: true,
-                        recommendation: true,
-                        positive_factors: true,
-                        negative_factors: true
-                    }
-                }
-            }
-        });
+        const lead = await leadRepository.findById(id);
 
         if (!lead) return null;
 
@@ -198,15 +147,13 @@ export class LeadService {
      * Tạo một Lead mới và trigger AI Scoring
      */
     async createLead(data: CreateLeadInput) {
-        const lead = await prisma.lead.create({
-            data: {
-                full_name: data.full_name,
-                phone: data.phone,
-                email: data.email,
-                lead_source: data.source,
-                occupation: data.occupation,
-                study_purpose: data.study_purpose,
-            }
+        const lead = await leadRepository.create({
+            full_name: data.full_name,
+            phone: data.phone,
+            email: data.email,
+            lead_source: data.source,
+            occupation: data.occupation,
+            study_purpose: data.study_purpose,
         });
 
         // Trigger AI Điểm Tự Động (Fire and forget - không dùng await chặn request)
@@ -221,20 +168,17 @@ export class LeadService {
      * Cập nhật thông tin Lead (Không thay đổi createdAt), Trigger AI nếu cần
      */
     async updateLead(id: number, data: UpdateLeadInput) {
-        const lead = await prisma.lead.findUnique({ where: { id } });
+        const lead = await leadRepository.checkExistence(id);
         if (!lead) return null;
 
-        const updatedLead = await prisma.lead.update({
-            where: { id },
-            data: {
-                status: data.status,
-                assigned_to: data.assigned_to,
-                notes: data.notes,
-                occupation: data.occupation,
-                study_purpose: data.study_purpose,
-                lead_source: data.source,
-                course_id: data.course_id,
-            }
+        const updatedLead = await leadRepository.update(id, {
+            status: data.status,
+            assigned_to: data.assigned_to,
+            notes: data.notes,
+            occupation: data.occupation,
+            study_purpose: data.study_purpose,
+            lead_source: data.source,
+            course_id: data.course_id,
         });
 
         // Chỉ trigger AI khi Sale thay đổi các thông số lõi (Core Features) làm ảnh hưởng trọng số AI
@@ -261,18 +205,14 @@ export class LeadService {
      */
     async deleteLead(id: number): Promise<boolean> {
         // Kiểm tra tồn tại
-        const existingLead = await prisma.lead.findUnique({
-            where: { id }
-        });
+        const existingLead = await leadRepository.checkExistence(id);
 
         if (!existingLead) {
             return false;
         }
 
         // Xóa cứng
-        await prisma.lead.delete({
-            where: { id }
-        });
+        await leadRepository.delete(id);
 
         return true;
     }
