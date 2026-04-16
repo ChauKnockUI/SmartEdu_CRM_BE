@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { leadService } from '../services/lead.service';
+import { leadScoringService } from '../services/ai/leadScoring.service';
 import { LeadStatus } from '../generated/prisma';
 
 export class LeadController {
@@ -238,6 +239,46 @@ export class LeadController {
             return res.status(500).json({
                 success: false,
                 message: 'Lỗi Internal Server khi thực hiện xóa Lead',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Trigger Chấm điểm AI Thủ Công | POST /api/leads/:id/score
+     */
+    async scoreLeadManually(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+
+            // Validate ID
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Gọi hàm scoreLead (đã bao bọc Try/Catch cực kỳ kín kẽ bên trong)
+            const result = await leadScoringService.scoreLead(Number(id));
+
+            if (!result.success) {
+                return res.status(400).json({
+                    success: false,
+                    message: result.error || 'Có lỗi xảy ra khi chấm điểm Lead.'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: 'Đã cập nhật thang điểm AI thành công.',
+                data: result.data // Chứa đối tượng LeadAiScore
+            });
+        } catch (error: any) {
+            console.error('[LeadController] scoreLeadManually error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi trigger vòng lặp AI',
                 error: error.message
             });
         }

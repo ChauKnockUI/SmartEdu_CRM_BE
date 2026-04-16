@@ -9,5 +9,6 @@ router.get('/:id', leadController.getLeadById);
 router.post('/', leadController.createLead);
 router.put('/:id', leadController.updateLead);
 router.delete('/:id', leadController.deleteLead);
+router.post('/:id/score', leadController.scoreLeadManually);
 
 export default router;
