@@ -93,6 +93,94 @@ export class LeadController {
             });
         }
     }
+
+    /**
+     * Tạo Lead mới | POST /api/leads
+     */
+    async createLead(req: Request, res: Response) {
+        try {
+            const { full_name, phone, email, source, occupation, study_purpose } = req.body;
+
+            // Basic Validation
+            if (!full_name || typeof full_name !== 'string' || full_name.trim() === '') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Validaton Error: Trường full_name là bắt buộc.'
+                });
+            }
+
+            const newLead = await leadService.createLead({
+                full_name: full_name.trim(),
+                phone,
+                email,
+                source,
+                occupation,
+                study_purpose
+            });
+
+            // Status 201: Created
+            return res.status(201).json({
+                success: true,
+                data: newLead
+            });
+        } catch (error: any) {
+            console.error('[LeadController] createLead error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi tạo Lead mới',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Cập nhật Lead | PUT /api/leads/:id
+     */
+    async updateLead(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+
+            // Validate ID
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Chỉ destructure những field được phép update theo y/c
+            const { status, assigned_to, notes, occupation, study_purpose, source, course_id } = req.body;
+
+            const updatedLead = await leadService.updateLead(Number(id), {
+                status,
+                assigned_to,
+                notes,
+                occupation,
+                study_purpose,
+                source,
+                course_id
+            });
+
+            if (!updatedLead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead để cập nhật (Not found)'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: updatedLead
+            });
+        } catch (error: any) {
+            console.error('[LeadController] updateLead error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const leadController = new LeadController();

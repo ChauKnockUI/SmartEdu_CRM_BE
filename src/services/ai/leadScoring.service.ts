@@ -32,7 +32,7 @@ export class LeadScoringService {
             Course_Interested: lead.course?.name || "other",
             Call_Attempt_Count: callAttemptCount,
             Last_Engagement_Status: lastEngagementStatus,
-            Days_Since_Created: parseFloat(daysSinceCreated.toFixed(2))
+            Days_Since_Created: Math.max(0, Math.floor(daysSinceCreated))
         };
     }
 
