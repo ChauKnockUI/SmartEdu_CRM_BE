@@ -253,6 +253,29 @@ export class LeadService {
 
         return updatedLead;
     }
+
+    /**
+     * Xóa Lead
+     * @param id
+     * Prisma sẽ tự động cascade xóa bảng `LeadActivity` và `LeadAiScore`
+     */
+    async deleteLead(id: number): Promise<boolean> {
+        // Kiểm tra tồn tại
+        const existingLead = await prisma.lead.findUnique({
+            where: { id }
+        });
+
+        if (!existingLead) {
+            return false;
+        }
+
+        // Xóa cứng
+        await prisma.lead.delete({
+            where: { id }
+        });
+
+        return true;
+    }
 }
 
 export const leadService = new LeadService();
