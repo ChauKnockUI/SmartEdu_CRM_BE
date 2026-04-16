@@ -6,5 +6,7 @@ const router = Router();
 // Định tuyến API kết nối sang Controller
 router.get('/', leadController.getLeads);
 router.get('/:id', leadController.getLeadById);
+router.post('/', leadController.createLead);
+router.put('/:id', leadController.updateLead);
 
 export default router;

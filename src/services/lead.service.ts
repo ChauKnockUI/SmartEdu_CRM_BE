@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma, LeadStatus } from '../generated/prisma';
+import { leadScoringService } from './ai/leadScoring.service';
 
 const prisma = new PrismaClient();
 
@@ -13,6 +14,25 @@ export interface GetLeadsQuery {
     search?: string;
     sort_by?: 'createdAt' | 'probability_score';
     sort_dir?: 'asc' | 'desc';
+}
+
+export interface CreateLeadInput {
+    full_name: string;
+    phone?: string;
+    email?: string;
+    source?: string;
+    occupation?: string;
+    study_purpose?: string;
+}
+
+export interface UpdateLeadInput {
+    status?: LeadStatus;
+    assigned_to?: number;
+    notes?: string;
+    occupation?: string;
+    study_purpose?: string;
+    source?: string;
+    course_id?: number;
 }
 
 export class LeadService {
@@ -172,6 +192,66 @@ export class LeadService {
             ...lead,
             aiScore: lead.aiScore || null
         };
+    }
+
+    /**
+     * Tạo một Lead mới và trigger AI Scoring
+     */
+    async createLead(data: CreateLeadInput) {
+        const lead = await prisma.lead.create({
+            data: {
+                full_name: data.full_name,
+                phone: data.phone,
+                email: data.email,
+                lead_source: data.source,
+                occupation: data.occupation,
+                study_purpose: data.study_purpose,
+            }
+        });
+
+        // Trigger AI Điểm Tự Động (Fire and forget - không dùng await chặn request)
+        leadScoringService.scoreLead(lead.id).catch(err => {
+            console.error(`[AI Trigger Error] Lỗi khi tự động chấm điểm Lead (ID: ${lead.id}):`, err.message);
+        });
+
+        return lead;
+    }
+
+    /**
+     * Cập nhật thông tin Lead (Không thay đổi createdAt), Trigger AI nếu cần
+     */
+    async updateLead(id: number, data: UpdateLeadInput) {
+        const lead = await prisma.lead.findUnique({ where: { id } });
+        if (!lead) return null;
+
+        const updatedLead = await prisma.lead.update({
+            where: { id },
+            data: {
+                status: data.status,
+                assigned_to: data.assigned_to,
+                notes: data.notes,
+                occupation: data.occupation,
+                study_purpose: data.study_purpose,
+                lead_source: data.source,
+                course_id: data.course_id,
+            }
+        });
+
+        // Chỉ trigger AI khi Sale thay đổi các thông số lõi (Core Features) làm ảnh hưởng trọng số AI
+        // Giảm tải áp lực thừa thãi lên Microservice Python
+        const aiFeatureTriggers: (keyof UpdateLeadInput)[] = [
+            'status', 'occupation', 'study_purpose', 'source', 'course_id'
+        ];
+        
+        const shouldScore = aiFeatureTriggers.some(field => data[field] !== undefined);
+
+        if (shouldScore) {
+            leadScoringService.scoreLead(id).catch(err => {
+                console.error(`[AI Trigger Error] Lỗi khi cập nhật điểm AI cho Lead (ID: ${id}):`, err.message);
+            });
+        }
+
+        return updatedLead;
     }
 }
 
