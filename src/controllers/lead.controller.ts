@@ -181,6 +181,67 @@ export class LeadController {
             });
         }
     }
+
+    /**
+     * Xóa Lead | DELETE /api/leads/:id
+     * - Chỉ Admin / Sale mới được xóa.
+     * - Tự động xóa chùm (Cascade) Activity và điểm AI.
+     */
+    async deleteLead(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            
+            // Simulating Role extraction from HTTP Header (vì chưa có Middleware Auth đầy đủ)
+            // Header VD trong Postman/Apidog: 'x-role': 'admin' hoặc 'sale'
+            const userRole = req.header('x-role');
+            
+            if (!userRole || !['admin', 'sale'].includes(userRole.toLowerCase())) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Forbidden: Bạn phải là (admin/sale) mới có quyền xóa Lead này.'
+                });
+            }
+
+            // Validate ID
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            const isDeleted = await leadService.deleteLead(Number(id));
+
+            if (!isDeleted) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Leader không tồn tại hoặc đã bị xóa.'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                message: `Đã xóa thành công Lead ID ${id} (và toàn bộ Activity & AI Score liên đới).`
+            });
+        } catch (error: any) {
+            console.error('[LeadController] deleteLead error:', error);
+            
+            // Fallback Foreign Key Exception: Nếu Lead đã join vào bảng Học Viên (Student)
+            // thì Prisma sẽ quăng lỗi chặn xoá do vi phạm khóa ngoại.
+            if (error.code === 'P2003') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Không thể xóa Lead này: Khách hàng đã được chuyển đổi thành Học viên (Student).'
+                });
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi thực hiện xóa Lead',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const leadController = new LeadController();
