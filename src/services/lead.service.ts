@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Prisma, LeadStatus, LeadActivityType } from '../generated/prisma';
 import { leadScoringService } from './ai/leadScoring.service';
 import { leadRepository } from '../repositories/lead.repository';
@@ -38,6 +39,11 @@ export interface CreateLeadActivityInput {
     content?: string;
     engagement_status?: string;
     user_id?: number;
+}
+
+export interface ConvertLeadInput {
+    // Email có thể được truyền từ body hoặc đấy từ bản ghi Lead hiện tại
+    email?: string;
 }
 
 export class LeadService {
@@ -281,6 +287,64 @@ export class LeadService {
         await leadRepository.delete(id);
 
         return true;
+    }
+
+    /**
+     * Convert Lead → Student:
+     * - Validate email bắt buộc nếu Lead chưa có
+     * - Kiểm tra Lead chưa ở trạng thái enrolled
+     * - Kiểm tra Lead chưa có Student record
+     * - Sinh password_hash rác (an toàn hơn plain text)
+     * - Ủy quyền transaction cho Repository
+     */
+    async convertLeadToStudent(leadId: number, input: ConvertLeadInput) {
+        // 1. Lấy thông tin Lead (đặc biệt có email, status, student)
+        const lead = await leadRepository.findLeadForConvert(leadId);
+
+        if (!lead) {
+            // Nhém lỗi có mã riêng để Controller phân biệt 404 vs 400
+            const err = new Error('Lead không tồn tại.');
+            (err as any).statusCode = 404;
+            throw err;
+        }
+
+        // 2. Kiểm tra Lead đã enrolled chưa
+        if (lead.status === LeadStatus.enrolled) {
+            const err = new Error('Lead này đã được chuyển đổi thành Học viên trước đó rồi.');
+            (err as any).statusCode = 400;
+            throw err;
+        }
+
+        // 3. Kiểm tra Lead đã có bản ghi Student chưa (data integrity guard)
+        if (lead.student) {
+            const err = new Error('Dữ liệu bất đồng bộ: Lead này đã có bản ghi Student liên kết.');
+            (err as any).statusCode = 409;
+            throw err;
+        }
+
+        // 4. Xác định email sẽ dùng (body ưu tiên hơn Lead record)
+        const resolvedEmail = input.email?.trim() || lead.email?.trim();
+        if (!resolvedEmail) {
+            const err = new Error('Validation Error: Lead này chưa có email. Vui lòng truyền email trong body request.');
+            (err as any).statusCode = 400;
+            throw err;
+        }
+
+        // 5. Sinh password_hash ngẫu nhiên (rác) — vị sau sẽ thay bằng bcrypt hash thật
+        // Nhưng KHAI BÁO RÕ trong code để không trở thành security debt im lặng
+        const rawTempPassword = crypto.randomBytes(16).toString('hex');
+        const password_hash = `TEMP_UNHASHED_${rawTempPassword}`; // TODO: thay bằng bcrypt.hash()
+
+        // 6. Gần toàn bộ transaction cho Repository (Single Responsibility)
+        const newStudent = await leadRepository.convertLeadToStudent({
+            lead_id: leadId,
+            full_name: lead.full_name,
+            phone: lead.phone,
+            email: resolvedEmail,
+            password_hash,
+        });
+
+        return newStudent;
     }
 }
 

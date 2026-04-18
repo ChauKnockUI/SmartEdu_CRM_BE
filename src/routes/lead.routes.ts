@@ -8,6 +8,7 @@ router.get('/', leadController.getLeads);
 router.get('/:id', leadController.getLeadById);
 router.get('/:id/activities', leadController.getLeadActivities);
 router.post('/:id/activities', leadController.createLeadActivity);
+router.post('/:id/convert', leadController.convertLead);
 router.post('/', leadController.createLead);
 router.put('/:id', leadController.updateLead);
 router.delete('/:id', leadController.deleteLead);

@@ -389,6 +389,71 @@ export class LeadController {
             });
         }
     }
+
+    /**
+     * Convert Lead → Student | POST /api/leads/:id/convert
+     * Body (optional): { email }
+     * - Dùng prisma.$transaction() → đảm bảo atomic (tất cả thành công hoặc rollback hết)
+     * - Trả về 201 kèm Student record vừa tạo
+     */
+    async convertLead(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            const { email } = req.body;
+
+            // Validate Lead ID
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Validate format email nếu được truyền vào
+            if (email !== undefined && email !== null) {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (typeof email !== 'string' || !emailRegex.test(email.trim())) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Validation Error: Email không đúng định dạng.'
+                    });
+                }
+            }
+
+            const newStudent = await leadService.convertLeadToStudent(Number(id), { email });
+
+            return res.status(201).json({
+                success: true,
+                message: `Chuyển đổi thành công! Lead ID ${id} đã trở thành Học viên.`,
+                data: newStudent
+            });
+
+        } catch (error: any) {
+            console.error('[LeadController] convertLead error:', error);
+
+            // Bắt lỗi có statusCode tuỳ chỉnh từ Service (400 / 404 / 409)
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
+            // Bắt Prisma Unique Constraint (P2002): Email đã tồn tại trong bảng users
+            if (error.code === 'P2002') {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Conflict: Email này đã được đăng ký bởi một tài khoản khác trong hệ thống.'
+                });
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi thực hiện Convert Lead',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const leadController = new LeadController();
