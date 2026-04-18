@@ -1,4 +1,4 @@
-import { Prisma, LeadStatus } from '../generated/prisma';
+import { Prisma, LeadStatus, LeadActivityType } from '../generated/prisma';
 import { leadScoringService } from './ai/leadScoring.service';
 import { leadRepository } from '../repositories/lead.repository';
 export interface GetLeadsQuery {
@@ -31,6 +31,13 @@ export interface UpdateLeadInput {
     study_purpose?: string;
     source?: string;
     course_id?: number;
+}
+
+export interface CreateLeadActivityInput {
+    type: LeadActivityType;
+    content?: string;
+    engagement_status?: string;
+    user_id?: number;
 }
 
 export class LeadService {
@@ -169,6 +176,37 @@ export class LeadService {
                 totalPages: Math.ceil(total / limit)
             }
         };
+    }
+
+    /**
+     * Tạo Activity cho Lead + Fire-and-forget AI Scoring + Cập nhật last_contacted
+     */
+    async createLeadActivity(leadId: number, data: CreateLeadActivityInput) {
+        // Kiểm tra Lead tồn tại
+        const lead = await leadRepository.checkExistence(leadId);
+        if (!lead) return null;
+
+        // Insert Activity vào Database
+        const activity = await leadRepository.createActivity({
+            lead_id: leadId,
+            type: data.type,
+            content: data.content,
+            engagement_status: data.engagement_status,
+            user_id: data.user_id,
+        });
+
+        // Cập nhật mốc thời gian liên hệ cuối cùng trên bảng Lead
+        leadRepository.updateLastContacted(leadId).catch(err => {
+            console.error(`[LeadService] Lỗi khi cập nhật last_contacted cho Lead (ID: ${leadId}):`, err.message);
+        });
+
+        // ===== CỐT LÕI: Fire-and-forget AI Scoring =====
+        // Trigger XGBoost AI cập nhật lại điểm số sau mỗi tương tác mới
+        leadScoringService.scoreLead(leadId).catch(err => {
+            console.error(`[AI Trigger Error] Lỗi khi re-score Lead sau Activity (Lead ID: ${leadId}):`, err.message);
+        });
+
+        return activity;
     }
 
     /**

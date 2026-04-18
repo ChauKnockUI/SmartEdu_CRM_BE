@@ -82,6 +82,28 @@ export class LeadRepository {
         });
     }
 
+    async createActivity(data: Prisma.LeadActivityUncheckedCreateInput) {
+        return await prisma.leadActivity.create({
+            data,
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        full_name: true,
+                        avatar_url: true,
+                    }
+                }
+            }
+        });
+    }
+
+    async updateLastContacted(leadId: number) {
+        return await prisma.lead.update({
+            where: { id: leadId },
+            data: { last_contacted: new Date() }
+        });
+    }
+
     async checkExistence(id: number) {
         return await prisma.lead.findUnique({
             where: { id },

@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { leadService } from '../services/lead.service';
 import { leadScoringService } from '../services/ai/leadScoring.service';
-import { LeadStatus } from '../generated/prisma';
+import { LeadStatus, LeadActivityType } from '../generated/prisma';
 
 export class LeadController {
     /**
@@ -135,6 +135,67 @@ export class LeadController {
             return res.status(500).json({
                 success: false,
                 message: 'Lỗi Internal Server khi lấy dữ liệu lịch sử tương tác',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Tạo mới Activity cho Lead | POST /api/leads/:id/activities
+     * Body: { type, content, engagement_status }
+     * Sau khi insert → Fire-and-forget AI Scoring
+     */
+    async createLeadActivity(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            const { type, content, engagement_status } = req.body;
+
+            // Validate Lead ID
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Validate type bắt buộc & thuộc enum cho phép
+            const allowedTypes: LeadActivityType[] = ['call', 'email', 'sms', 'meeting', 'note', 'status_change'];
+            if (!type || !allowedTypes.includes(type as LeadActivityType)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Validation Error: Trường 'type' là bắt buộc và phải thuộc [${allowedTypes.join(', ')}]`
+                });
+            }
+
+            // Lấy user_id từ header giả lập (tương tự deleteLead) — sẽ thay bằng Auth Middleware sau
+            const userId = req.header('x-user-id');
+
+            const activity = await leadService.createLeadActivity(Number(id), {
+                type: type as LeadActivityType,
+                content,
+                engagement_status,
+                user_id: userId ? parseInt(userId, 10) : undefined,
+            });
+
+            if (!activity) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy Lead để ghi nhận Activity (Not found)'
+                });
+            }
+
+            return res.status(201).json({
+                success: true,
+                message: 'Đã ghi nhận Activity thành công. AI đang cập nhật lại điểm số...',
+                data: activity
+            });
+
+        } catch (error: any) {
+            console.error('[LeadController] createLeadActivity error:', error);
+
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi tạo Activity cho Lead',
                 error: error.message
             });
         }
