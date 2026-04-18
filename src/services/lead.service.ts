@@ -144,6 +144,34 @@ export class LeadService {
     }
 
     /**
+     * Lấy lịch sử tương tác của Lead, sắp xếp theo createdAt giảm dần
+     */
+    async getLeadActivities(leadId: number, query: { page?: number; limit?: number }) {
+        // Kiểm tra Lead tồn tại
+        const lead = await leadRepository.checkExistence(leadId);
+        if (!lead) return null;
+
+        const page = query.page && query.page > 0 ? query.page : 1;
+        const limit = query.limit && query.limit > 0 ? query.limit : 10;
+        const skip = (page - 1) * limit;
+
+        const [total, activities] = await Promise.all([
+            leadRepository.countActivities(leadId),
+            leadRepository.getActivitiesByLeadId(leadId, skip, limit)
+        ]);
+
+        return {
+            data: activities,
+            pagination: {
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit)
+            }
+        };
+    }
+
+    /**
      * Tạo một Lead mới và trigger AI Scoring
      */
     async createLead(data: CreateLeadInput) {

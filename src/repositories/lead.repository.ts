@@ -58,6 +58,30 @@ export class LeadRepository {
         });
     }
 
+    async getActivitiesByLeadId(leadId: number, skip?: number, take?: number) {
+        return await prisma.leadActivity.findMany({
+            where: { lead_id: leadId },
+            skip,
+            take,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        full_name: true,
+                        avatar_url: true,
+                    }
+                }
+            }
+        });
+    }
+
+    async countActivities(leadId: number) {
+        return await prisma.leadActivity.count({
+            where: { lead_id: leadId }
+        });
+    }
+
     async checkExistence(id: number) {
         return await prisma.lead.findUnique({
             where: { id },
