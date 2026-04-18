@@ -96,6 +96,51 @@ export class LeadController {
     }
 
     /**
+     * Lấy danh sách lịch sử tương tác của 1 Lead | GET /api/leads/:id/activities
+     */
+    async getLeadActivities(req: Request, res: Response) {
+        try {
+            const { id } = req.params;
+            const { page, limit } = req.query;
+
+            // Validate ID hợp lệ
+            if (!id || isNaN(Number(id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            const result = await leadService.getLeadActivities(Number(id), {
+                page: page ? parseInt(page as string, 10) : 1,
+                limit: limit ? parseInt(limit as string, 10) : 10
+            });
+
+            if (!result) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead (Not found)'
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
+                data: result.data,
+                pagination: result.pagination
+            });
+            
+        } catch (error: any) {
+            console.error('[LeadController] getLeadActivities error:', error);
+
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi Internal Server khi lấy dữ liệu lịch sử tương tác',
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * Tạo Lead mới | POST /api/leads
      */
     async createLead(req: Request, res: Response) {
