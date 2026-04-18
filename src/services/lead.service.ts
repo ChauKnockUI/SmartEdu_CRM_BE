@@ -186,10 +186,13 @@ export class LeadService {
 
     /**
      * Tạo Activity cho Lead + Fire-and-forget AI Scoring + Cập nhật last_contacted
+     * [Automation HubSpot-style]: Nếu Lead vẫn còn status "new" và Activity là
+     * một tương tác thực sự (call/email/sms/meeting) → tự động đẩy status → "contacted"
+     * Type "note" KHÔNG kích hoạt automation (ghi chú nội bộ, không phải liên lạc thật)
      */
     async createLeadActivity(leadId: number, data: CreateLeadActivityInput) {
-        // Kiểm tra Lead tồn tại
-        const lead = await leadRepository.checkExistence(leadId);
+        // Lấy thông tin đầy đủ Lead (cần status để quyết định automation)
+        const lead = await leadRepository.findLeadForConvert(leadId);
         if (!lead) return null;
 
         // Insert Activity vào Database
@@ -200,6 +203,20 @@ export class LeadService {
             engagement_status: data.engagement_status,
             user_id: data.user_id,
         });
+
+        // ===== AUTOMATION: Tự động cập nhật status =====
+        // Chỉ kích hoạt khi:
+        //   1. Activity là tương tác với khách (KHÔNG phải "note" nội bộ)
+        //   2. Lead vẫn đang ở status "new" (chưa Sale nào xử lý thủ công)
+        const isRealInteraction = data.type !== 'note';
+        const isStillNew = lead.status === LeadStatus.new;
+
+        if (isRealInteraction && isStillNew) {
+            leadRepository.update(leadId, { status: LeadStatus.contacted }).catch(err => {
+                console.error(`[LeadService] Lỗi khi auto-update status → contacted (Lead ID: ${leadId}):`, err.message);
+            });
+            console.log(`[LeadService] 🤖 Auto-status: Lead ID ${leadId}: new → contacted (trigger: ${data.type})`);
+        }
 
         // Cập nhật mốc thời gian liên hệ cuối cùng trên bảng Lead
         leadRepository.updateLastContacted(leadId).catch(err => {
@@ -213,6 +230,7 @@ export class LeadService {
         });
 
         return activity;
+
     }
 
     /**
