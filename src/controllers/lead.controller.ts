@@ -300,14 +300,15 @@ export class LeadController {
             
             // Simulating Role extraction from HTTP Header (vì chưa có Middleware Auth đầy đủ)
             // Header VD trong Postman/Apidog: 'x-role': 'admin' hoặc 'sale'
-            const userRole = req.header('x-role');
-            
-            if (!userRole || !['admin', 'sale'].includes(userRole.toLowerCase())) {
-                return res.status(403).json({
-                    success: false,
-                    message: 'Forbidden: Bạn phải là (admin/sale) mới có quyền xóa Lead này.'
-                });
-            }
+            //const userRole = req.header('x-role');
+            // const userRole = (req as any).user?.role;
+
+            // if (!userRole || !['admin', 'sale'].includes(userRole)) {
+            //     return res.status(403).json({
+            //         success: false,
+            //         message: 'Forbidden: Bạn phải là (admin/sale) mới có quyền xóa Lead này.'
+            //     });
+            // }
 
             // Validate ID
             if (!id || isNaN(Number(id))) {
