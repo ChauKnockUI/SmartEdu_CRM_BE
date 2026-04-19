@@ -36,10 +36,11 @@ model Lead {
   full_name         String         @db.VarChar(255)
   phone             String?        @db.VarChar(20)
   email             String?        @db.VarChar(255)
-  source            LeadSource     @default(other)
+  lead_source       String?        @default("other") @db.VarChar(255)
+  occupation        String?        @db.VarChar(255)
+  study_purpose     String?        @db.VarChar(255)
+  course_id         Int?
   status            LeadStatus     @default(new)
-  ai_score          Float?
-  ai_recommendation String?
   assigned_to       Int?
   notes             String?
   last_contacted    DateTime?      @db.Timestamptz(6)
@@ -48,28 +49,33 @@ model Lead {
   activities        LeadActivity[]
   assignedUser      User?          @relation("LeadAssignee", fields: [assigned_to], references: [id])
   student           Student?
+  course            Course?        @relation("LeadCourseInterested", fields: [course_id], references: [id])
+  aiScore           LeadAiScore?
 
   @@index([status])
-  @@index([source])
+  @@index([lead_source])
+  @@index([course_id])
   @@index([assigned_to])
   @@index([createdAt])
   @@map("leads")
 }
 
 model LeadActivity {
-  id        Int              @id @default(autoincrement())
-  lead_id   Int
-  user_id   Int?
-  type      LeadActivityType
-  content   String?
+  id                Int              @id @default(autoincrement())
+  lead_id           Int
+  user_id           Int?
+  type              LeadActivityType
+  content           String?
+  // Frontend/Backend suggestion: "connected", "busy_call_back", "no_answer", "wrong_number", "not_interested"
+  engagement_status String?          @db.VarChar(255)
   createdAt DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt DateTime         @updatedAt @db.Timestamptz(6)
   lead      Lead             @relation(fields: [lead_id], references: [id], onDelete: Cascade)
   user      User?            @relation(fields: [user_id], references: [id])
 
-  @@index([lead_id])
+  @@index([lead_id, type]) // Optimize for: count Call_Attempt_Count
+  @@index([lead_id, createdAt]) // Optimize for: get Last_Engagement_Status
   @@index([user_id])
-  @@index([type])
   @@map("lead_activities")
 }
 
@@ -128,6 +134,7 @@ model Course {
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @db.Timestamptz(6)
   classes        Class[]
+  leads          Lead[]   @relation("LeadCourseInterested")
 
   @@map("courses")
 }
@@ -286,6 +293,9 @@ model Payment {
   @@map("payments")
 }
 
+/// Audit logging table for all raw AI prediction requests/responses.
+/// Unlike LeadAiScore which is meant for UI display and business logic, 
+/// AIPrediction acts as an append-only historical log for Model Monitoring and Calibration.
 model AIPrediction {
   id              Int            @id @default(autoincrement())
   prediction_type PredictionType
@@ -300,20 +310,26 @@ model AIPrediction {
   @@map("ai_predictions")
 }
 
+model LeadAiScore {
+  id               Int                  @id @default(autoincrement())
+  lead_id          Int                  @unique
+  probability_score Float
+  recommendation   LeadAiRecommendation
+  positive_factors Json?
+  negative_factors Json?
+  scored_at        DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(6)
+  lead             Lead                 @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+
+  @@index([probability_score(sort: Desc)])
+  @@map("lead_ai_scores")
+}
+
 enum UserRole {
   admin
   sale
   teacher
   student
-}
-
-enum LeadSource {
-  facebook
-  zalo
-  website
-  referral
-  walk_in
-  other
 }
 
 enum LeadStatus {
@@ -323,6 +339,12 @@ enum LeadStatus {
   trial
   enrolled
   lost
+}
+
+enum LeadAiRecommendation {
+  HOT_LEAD
+  WARM_LEAD
+  COLD_LEAD
 }
 
 enum LeadActivityType {

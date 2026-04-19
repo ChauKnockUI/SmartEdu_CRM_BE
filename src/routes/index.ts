@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRouter from './auth.routes';
+import leadRouter from './lead.routes';
 
 const router = Router();
 
@@ -10,5 +11,8 @@ router.get('/', (_req, res) => {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 router.use('/auth', authRouter);
+
+// ─── Leads ────────────────────────────────────────────────────────────────────
+router.use('/leads', leadRouter);
 
 export { router };
