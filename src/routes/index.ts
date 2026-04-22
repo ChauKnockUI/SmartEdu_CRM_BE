@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import authRouter from './auth.routes';
 import leadRouter from './lead.routes';
+import courseRouter from './course.routes';
 
 const router = Router();
 
@@ -14,5 +15,8 @@ router.use('/auth', authRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);
+
+// ─── Courses ──────────────────────────────────────────────────────────────────
+router.use('/courses', courseRouter);
 
 export { router };

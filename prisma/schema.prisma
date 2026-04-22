@@ -131,6 +131,7 @@ model Course {
   total_sessions Int?
   fee            Decimal? @db.Decimal(15, 2)
   duration_weeks Int?
+  is_active      Boolean  @default(true)
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @db.Timestamptz(6)
   classes        Class[]
