@@ -2,6 +2,7 @@ import { Router } from 'express';
 import authRouter from './auth.routes';
 import leadRouter from './lead.routes';
 import courseRouter from './course.routes';
+import roomRouter from './room.routes';
 
 const router = Router();
 
@@ -18,5 +19,8 @@ router.use('/leads', leadRouter);
 
 // ─── Courses ──────────────────────────────────────────────────────────────────
 router.use('/courses', courseRouter);
+
+// ─── Rooms ────────────────────────────────────────────────────────────────────
+router.use('/rooms', roomRouter);
 
 export { router };
