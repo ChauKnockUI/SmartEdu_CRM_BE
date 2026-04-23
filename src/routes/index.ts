@@ -3,6 +3,7 @@ import authRouter from './auth.routes';
 import leadRouter from './lead.routes';
 import courseRouter from './course.routes';
 import roomRouter from './room.routes';
+import classRouter from './class.routes';
 
 const router = Router();
 
@@ -22,5 +23,8 @@ router.use('/courses', courseRouter);
 
 // ─── Rooms ────────────────────────────────────────────────────────────────────
 router.use('/rooms', roomRouter);
+
+// ─── Classes ──────────────────────────────────────────────────────────────────
+router.use('/classes', classRouter);
 
 export { router };
