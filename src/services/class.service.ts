@@ -18,8 +18,8 @@ export interface CreateClassInput {
     status?: ClassStatus;
     start_date?: Date;
     end_date?: Date;
-    schedule_days?: string;
-    schedule_time?: string;
+    schedule_days?: number[];
+    schedule_time?: string[];
     max_students?: number;
 }
 
@@ -76,8 +76,105 @@ export class ClassService {
         return await classRepository.findById(id);
     }
 
+    // Helper function to parse HH:mm into Date object (1970-01-01)
+    private parseTimeToDate(timeString: string): Date {
+        const [hours, minutes] = timeString.split(':').map(Number);
+        return new Date(Date.UTC(1970, 0, 1, hours, minutes, 0, 0));
+    }
+
     async createClass(data: CreateClassInput) {
-        return await classRepository.create(data as Prisma.ClassUncheckedCreateInput);
+        let generatedSchedules: Prisma.ScheduleCreateManyInput[] = [];
+
+        if (data.start_date && data.end_date && data.schedule_days && data.schedule_time && data.schedule_time.length === 2) {
+            const startTimeDb = this.parseTimeToDate(data.schedule_time[0]);
+            const endTimeDb = this.parseTimeToDate(data.schedule_time[1]);
+
+            let currentDate = new Date(data.start_date);
+            const endDt = new Date(data.end_date);
+            
+            // Lấy tất cả các ngày (Date) được sinh ra
+            const datesToCheck: Date[] = [];
+
+            while (currentDate <= endDt) {
+                if (data.schedule_days.includes(currentDate.getDay())) {
+                    const clonedDate = new Date(currentDate);
+                    datesToCheck.push(clonedDate);
+                    generatedSchedules.push({
+                        date: clonedDate,
+                        start_time: startTimeDb,
+                        end_time: endTimeDb,
+                        room_id: data.room_id || null,
+                        teacher_id: data.teacher_id || null,
+                        status: 'scheduled'
+                    });
+                }
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+
+            if (generatedSchedules.length === 0) {
+                const err = new Error('Khoảng thời gian không sinh ra buổi học nào (kiểm tra start_date, end_date và schedule_days)');
+                (err as any).statusCode = 400;
+                throw err;
+            }
+
+            // 1. Kiểm tra trùng lịch Phòng học
+            // Helper để format giờ từ DB ra chuỗi HH:mm
+            const formatTime = (d: Date | null) => {
+                if (!d) return 'Unknown';
+                return d.toISOString().substring(11, 16);
+            };
+
+            // 1. Kiểm tra trùng lịch Phòng học
+            if (data.room_id) {
+                const roomConflict = await classRepository.checkScheduleConflict(
+                    data.room_id, 
+                    null, 
+                    datesToCheck, 
+                    startTimeDb, 
+                    endTimeDb
+                );
+
+                if (roomConflict) {
+                    const dateStr = roomConflict.date.toISOString().split('T')[0];
+                    const timeStr = `${formatTime(roomConflict.start_time)} - ${formatTime(roomConflict.end_time)}`;
+                    const err = new Error(`Trùng lịch Phòng học! Phòng này đã có lớp vào ngày ${dateStr} trong khung giờ ${timeStr}. Vui lòng chọn phòng khác.`);
+                    (err as any).statusCode = 409;
+                    throw err;
+                }
+            }
+
+            // 2. Kiểm tra trùng lịch Giáo viên
+            if (data.teacher_id) {
+                const teacherConflict = await classRepository.checkScheduleConflict(
+                    null, 
+                    data.teacher_id, 
+                    datesToCheck, 
+                    startTimeDb, 
+                    endTimeDb
+                );
+
+                if (teacherConflict) {
+                    const dateStr = teacherConflict.date.toISOString().split('T')[0];
+                    const timeStr = `${formatTime(teacherConflict.start_time)} - ${formatTime(teacherConflict.end_time)}`;
+                    const err = new Error(`Trùng lịch Giáo viên! Giáo viên này đã có lịch dạy vào ngày ${dateStr} trong khung giờ ${timeStr}. Vui lòng xếp giáo viên khác.`);
+                    (err as any).statusCode = 409;
+                    throw err;
+                }
+            }
+        }
+
+        // Chuyển mảng thành chuỗi để lưu vào DB (vì schema đang để là String)
+        const classInput: Prisma.ClassUncheckedCreateInput = {
+            ...data,
+            schedule_days: data.schedule_days ? JSON.stringify(data.schedule_days) : undefined,
+            schedule_time: data.schedule_time ? JSON.stringify(data.schedule_time) : undefined,
+        };
+
+        if (generatedSchedules.length > 0) {
+            return await classRepository.createWithSchedules(classInput, generatedSchedules);
+        } else {
+            return await classRepository.create(classInput);
+        }
     }
 
     async updateClass(id: number, data: UpdateClassInput) {

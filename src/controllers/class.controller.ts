@@ -77,6 +77,22 @@ export class ClassController {
                 });
             }
 
+            // Validation mảng schedule_days (Ví dụ: [1, 3, 5])
+            if (schedule_days && !Array.isArray(schedule_days)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'schedule_days phải là một mảng các số nguyên (0-6)'
+                });
+            }
+
+            // Validation mảng schedule_time (Ví dụ: ["18:00", "20:00"])
+            if (schedule_time && (!Array.isArray(schedule_time) || schedule_time.length !== 2)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'schedule_time phải là một mảng gồm 2 phần tử giờ bắt đầu và kết thúc (VD: ["18:00", "20:00"])'
+                });
+            }
+
             const newClass = await classService.createClass({
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
@@ -85,18 +101,27 @@ export class ClassController {
                 status: status as ClassStatus,
                 start_date: start_date ? new Date(start_date) : undefined,
                 end_date: end_date ? new Date(end_date) : undefined,
-                schedule_days,
-                schedule_time,
+                schedule_days: schedule_days as number[],
+                schedule_time: schedule_time as string[],
                 max_students: max_students ? Number(max_students) : undefined
             });
 
             return res.status(201).json({
                 success: true,
-                message: 'Tạo Lớp học thành công',
+                message: 'Tạo Lớp học và Sinh Lịch học thành công',
                 data: newClass
             });
         } catch (error: any) {
             console.error('[ClassController] createClass error:', error);
+            
+            // Xử lý lỗi từ Service ném ra (400 hoặc 409 Conflict)
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
             return res.status(500).json({
                 success: false,
                 message: 'Internal Server Error',
