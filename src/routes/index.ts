@@ -4,6 +4,7 @@ import leadRouter from './lead.routes';
 import courseRouter from './course.routes';
 import roomRouter from './room.routes';
 import classRouter from './class.routes';
+import teacherRouter from './teacher.routes';
 
 const router = Router();
 
@@ -26,5 +27,8 @@ router.use('/rooms', roomRouter);
 
 // ─── Classes ──────────────────────────────────────────────────────────────────
 router.use('/classes', classRouter);
+
+// ─── Teachers ─────────────────────────────────────────────────────────────────
+router.use('/teachers', teacherRouter);
 
 export { router };

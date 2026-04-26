@@ -106,6 +106,27 @@ export class ClassRepository {
             }
         });
     }
+
+    async findConflictingResources(dates: Date[], startTime: Date, endTime: Date) {
+        const conflicts = await prisma.schedule.findMany({
+            where: {
+                date: { in: dates },
+                AND: [
+                    { start_time: { lt: endTime } },
+                    { end_time: { gt: startTime } }
+                ]
+            },
+            select: {
+                room_id: true,
+                teacher_id: true
+            }
+        });
+
+        const conflictingRooms = Array.from(new Set(conflicts.map(c => c.room_id).filter(id => id !== null) as number[]));
+        const conflictingTeachers = Array.from(new Set(conflicts.map(c => c.teacher_id).filter(id => id !== null) as number[]));
+
+        return { conflictingRooms, conflictingTeachers };
+    }
 }
 
 export const classRepository = new ClassRepository();

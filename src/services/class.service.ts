@@ -77,9 +77,23 @@ export class ClassService {
     }
 
     // Helper function to parse HH:mm into Date object (1970-01-01)
-    private parseTimeToDate(timeString: string): Date {
+    public parseTimeToDate(timeString: string): Date {
         const [hours, minutes] = timeString.split(':').map(Number);
         return new Date(Date.UTC(1970, 0, 1, hours, minutes, 0, 0));
+    }
+
+    public generateScheduleDates(startDate: Date, endDate: Date, scheduleDays: number[]): Date[] {
+        let currentDate = new Date(startDate);
+        const endDt = new Date(endDate);
+        const datesToCheck: Date[] = [];
+
+        while (currentDate <= endDt) {
+            if (scheduleDays.includes(currentDate.getDay())) {
+                datesToCheck.push(new Date(currentDate));
+            }
+            currentDate.setDate(currentDate.getDate() + 1);
+        }
+        return datesToCheck;
     }
 
     async createClass(data: CreateClassInput) {
@@ -89,26 +103,18 @@ export class ClassService {
             const startTimeDb = this.parseTimeToDate(data.schedule_time[0]);
             const endTimeDb = this.parseTimeToDate(data.schedule_time[1]);
 
-            let currentDate = new Date(data.start_date);
-            const endDt = new Date(data.end_date);
-            
-            // Lấy tất cả các ngày (Date) được sinh ra
-            const datesToCheck: Date[] = [];
+            // Sinh danh sách ngày học
+            const datesToCheck = this.generateScheduleDates(new Date(data.start_date), new Date(data.end_date), data.schedule_days);
 
-            while (currentDate <= endDt) {
-                if (data.schedule_days.includes(currentDate.getDay())) {
-                    const clonedDate = new Date(currentDate);
-                    datesToCheck.push(clonedDate);
-                    generatedSchedules.push({
-                        date: clonedDate,
-                        start_time: startTimeDb,
-                        end_time: endTimeDb,
-                        room_id: data.room_id || null,
-                        teacher_id: data.teacher_id || null,
-                        status: 'scheduled'
-                    });
-                }
-                currentDate.setDate(currentDate.getDate() + 1);
+            for (const d of datesToCheck) {
+                generatedSchedules.push({
+                    date: d,
+                    start_time: startTimeDb,
+                    end_time: endTimeDb,
+                    room_id: data.room_id || null,
+                    teacher_id: data.teacher_id || null,
+                    status: 'scheduled'
+                });
             }
 
             if (generatedSchedules.length === 0) {
@@ -182,6 +188,55 @@ export class ClassService {
         if (!existing) return null;
 
         return await classRepository.update(id, data as Prisma.ClassUncheckedUpdateInput);
+    }
+
+    async getAvailableRooms(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[]) {
+        if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
+        
+        const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
+        const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
+        const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
+
+        if (datesToCheck.length === 0) return [];
+
+        const { conflictingRooms } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb);
+
+        // Fetch all active rooms NOT in conflictingRooms (This requires prisma client or a roomRepository method)
+        // Since we are in class.service, we should ideally call room.service, but for simplicity we can just query Prisma directly here
+        // Wait, we can import prisma directly
+        const { PrismaClient } = require('../generated/prisma');
+        const prisma = new PrismaClient();
+        
+        return await prisma.room.findMany({
+            where: {
+                is_active: true,
+                id: { notIn: conflictingRooms }
+            },
+            select: { id: true, name: true, capacity: true }
+        });
+    }
+
+    async getAvailableTeachers(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[]) {
+        if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
+        
+        const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
+        const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
+        const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
+
+        if (datesToCheck.length === 0) return [];
+
+        const { conflictingTeachers } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb);
+
+        const { PrismaClient } = require('../generated/prisma');
+        const prisma = new PrismaClient();
+        
+        return await prisma.teacher.findMany({
+            where: {
+                // assume teacher has status or just all teachers
+                id: { notIn: conflictingTeachers }
+            },
+            select: { id: true, user: { select: { full_name: true } } }
+        });
     }
 }
 

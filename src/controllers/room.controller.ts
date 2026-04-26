@@ -30,6 +30,53 @@ export class RoomController {
         }
     }
 
+    async getAvailableRooms(req: Request, res: Response) {
+        try {
+            const { start_date, end_date, schedule_days, schedule_time } = req.query;
+
+            if (!start_date || !end_date || !schedule_days || !schedule_time) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Thiếu các tham số bắt buộc: start_date, end_date, schedule_days, schedule_time'
+                });
+            }
+
+            // Parse schedule_days: "1,3,5" -> [1, 3, 5]
+            const daysArray = (schedule_days as string).split(',').map(Number);
+            if (daysArray.some(isNaN)) {
+                return res.status(400).json({ success: false, message: 'schedule_days không hợp lệ' });
+            }
+
+            // Parse schedule_time: "18:00,20:00" -> ["18:00", "20:00"]
+            const timeArray = (schedule_time as string).split(',');
+            if (timeArray.length !== 2) {
+                return res.status(400).json({ success: false, message: 'schedule_time không hợp lệ (cần 2 giờ)' });
+            }
+
+            // Gọi classService để tận dụng thuật toán rảnh/bận
+            // Lưu ý: Cần import classService ở đầu file
+            const { classService } = require('../services/class.service');
+            const availableRooms = await classService.getAvailableRooms(
+                new Date(start_date as string),
+                new Date(end_date as string),
+                daysArray,
+                timeArray
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: availableRooms
+            });
+        } catch (error: any) {
+            console.error('[RoomController] getAvailableRooms error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Internal Server Error',
+                error: error.message
+            });
+        }
+    }
+
     async getRoomById(req: Request, res: Response) {
         try {
             const { id } = req.params;

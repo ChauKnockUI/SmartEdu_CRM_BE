@@ -10,6 +10,9 @@ router.use(authenticate);
 // Lấy danh sách phòng học (có phân trang, search, filter capacity, is_active)
 router.get('/', roomController.getRooms);
 
+// Lấy danh sách phòng rảnh
+router.get('/available', roomController.getAvailableRooms);
+
 // Lấy chi tiết phòng học
 router.get('/:id', roomController.getRoomById);
 
