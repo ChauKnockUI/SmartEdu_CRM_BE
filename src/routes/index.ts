@@ -5,6 +5,7 @@ import courseRouter from './course.routes';
 import roomRouter from './room.routes';
 import classRouter from './class.routes';
 import teacherRouter from './teacher.routes';
+import studentRouter from './student.routes';
 
 const router = Router();
 
@@ -30,5 +31,8 @@ router.use('/classes', classRouter);
 
 // ─── Teachers ─────────────────────────────────────────────────────────────────
 router.use('/teachers', teacherRouter);
+
+// ─── Students ─────────────────────────────────────────────────────────────────
+router.use('/students', studentRouter);
 
 export { router };
