@@ -90,6 +90,15 @@ export class StudentRepository {
                 }
             });
 
+            // 3. (Luồng 1) Nếu học viên này đi lên từ Khách hàng tiềm năng (Lead)
+            // Tự động chốt Sales (Chuyển status của Lead thành 'enrolled')
+            if (studentData.lead_id) {
+                await tx.lead.update({
+                    where: { id: studentData.lead_id },
+                    data: { status: 'enrolled' }
+                });
+            }
+
             return newStudent;
         });
     }
