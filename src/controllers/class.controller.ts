@@ -179,6 +179,43 @@ export class ClassController {
             });
         }
     }
+
+    async enrollStudent(req: Request, res: Response) {
+        try {
+            const class_id = parseInt(req.params.id);
+            const { student_ids } = req.body;
+
+            if (isNaN(class_id) || !Array.isArray(student_ids) || student_ids.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID lớp học không hợp lệ hoặc danh sách student_ids trống'
+                });
+            }
+
+            const result = await classService.enrollStudents(class_id, student_ids.map(Number));
+
+            return res.status(201).json({
+                success: true,
+                message: 'Đã xử lý danh sách ghi danh',
+                data: result
+            });
+        } catch (error: any) {
+            console.error('[ClassController] enrollStudents error:', error);
+            
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
+            return res.status(500).json({
+                success: false,
+                message: 'Internal Server Error',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const classController = new ClassController();
