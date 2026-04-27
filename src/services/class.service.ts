@@ -238,6 +238,115 @@ export class ClassService {
             select: { id: true, user: { select: { full_name: true } } }
         });
     }
+
+    async enrollStudents(class_id: number, student_ids: number[]) {
+        const { PrismaClient } = require('../generated/prisma');
+        const prisma = new PrismaClient();
+
+        // 1. Lấy thông tin lớp học, sĩ số và lịch học
+        const targetClass = await prisma.class.findUnique({
+            where: { id: class_id },
+            include: {
+                classEnrollments: { where: { status: 'active' } },
+                schedules: { where: { date: { gte: new Date() } } } // Chỉ lấy lịch tương lai
+            }
+        });
+
+        if (!targetClass) {
+            const err = new Error('Không tìm thấy Lớp học');
+            (err as any).statusCode = 404;
+            throw err;
+        }
+
+        // 2. Rào chắn 1: Kiểm tra Sĩ số (Capacity)
+        if (targetClass.max_students && (targetClass.classEnrollments.length + student_ids.length) > targetClass.max_students) {
+            const available = targetClass.max_students - targetClass.classEnrollments.length;
+            const err = new Error(`Lớp học sẽ vượt quá sĩ số. Chỉ còn trống ${available} chỗ.`);
+            (err as any).statusCode = 400;
+            throw err;
+        }
+
+        const successful_ids: number[] = [];
+        const failed: { student_id: number, reason: string }[] = [];
+
+        // Lấy tất cả lịch học tương lai của các học viên trong danh sách
+        const studentEnrollments = await prisma.classEnrollment.findMany({
+            where: {
+                student_id: { in: student_ids },
+                status: 'active'
+            },
+            include: {
+                class: {
+                    include: {
+                        schedules: {
+                            where: { date: { gte: new Date() } }
+                        }
+                    }
+                }
+            }
+        });
+
+        const targetSchedules = targetClass.schedules;
+        
+        for (const s_id of student_ids) {
+            // Check Duplicate
+            const isDuplicate = targetClass.classEnrollments.some((e: any) => e.student_id === s_id);
+            if (isDuplicate) {
+                failed.push({ student_id: s_id, reason: 'Đã tồn tại trong lớp' });
+                continue;
+            }
+
+            // Check Conflict
+            const myEnrollments = studentEnrollments.filter((e: any) => e.student_id === s_id);
+            let hasConflict = false;
+
+            for (const enrollment of myEnrollments) {
+                if (hasConflict) break;
+                const existingSchedules = enrollment.class.schedules;
+                
+                for (const newSch of targetSchedules) {
+                    if (hasConflict) break;
+                    if (!newSch.start_time || !newSch.end_time) continue;
+                    
+                    for (const exSch of existingSchedules) {
+                        if (!exSch.start_time || !exSch.end_time) continue;
+                        
+                        // So sánh ngày
+                        if (newSch.date.getTime() === exSch.date.getTime()) {
+                            // So sánh giờ: (StartA < EndB) && (EndA > StartB)
+                            if (newSch.start_time < exSch.end_time && newSch.end_time > exSch.start_time) {
+                                const dateStr = newSch.date.toISOString().split('T')[0];
+                                failed.push({ student_id: s_id, reason: `Trùng lịch lớp ${enrollment.class.name} ngày ${dateStr}` });
+                                hasConflict = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!hasConflict) {
+                successful_ids.push(s_id);
+            }
+        }
+
+        // 5. Database Action: Tạo bản ghi vào ClassEnrollment cho những ID hợp lệ
+        if (successful_ids.length > 0) {
+            const dataToInsert = successful_ids.map(id => ({
+                class_id,
+                student_id: id
+                // status là active theo default trong DB
+            }));
+            await prisma.classEnrollment.createMany({
+                data: dataToInsert
+            });
+        }
+
+        return {
+            successful: successful_ids,
+            failed: failed
+        };
+    }
 }
 
 export const classService = new ClassService();

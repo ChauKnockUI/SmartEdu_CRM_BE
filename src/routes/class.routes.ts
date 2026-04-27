@@ -21,4 +21,7 @@ router.post('/', authorize('admin'), classController.createClass);
 // Cập nhật thông tin lớp học
 router.put('/:id', authorize('admin'), classController.updateClass);
 
+// Ghi danh học viên vào lớp (Academic Enrollment)
+router.post('/:id/enroll', authorize('admin', 'sale'), classController.enrollStudent);
+
 export default router;
