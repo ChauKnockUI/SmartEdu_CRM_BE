@@ -6,6 +6,7 @@ import roomRouter from './room.routes';
 import classRouter from './class.routes';
 import teacherRouter from './teacher.routes';
 import studentRouter from './student.routes';
+import scheduleRouter from './schedule.routes';
 
 const router = Router();
 
@@ -34,5 +35,8 @@ router.use('/teachers', teacherRouter);
 
 // ─── Students ─────────────────────────────────────────────────────────────────
 router.use('/students', studentRouter);
+
+// ─── Schedules ────────────────────────────────────────────────────────────────
+router.use('/schedules', scheduleRouter);
 
 export { router };
