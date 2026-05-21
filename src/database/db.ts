@@ -1,10 +1,7 @@
 import { PrismaClient } from '../generated/prisma';
 
 // Singleton pattern: tránh tạo nhiều connections trong development (hot reload)
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
-
-export const prisma =
-  globalForPrisma.prisma ||
+const createPrismaClient = () =>
   new PrismaClient({
     log:
       process.env.NODE_ENV === 'development'
@@ -12,8 +9,15 @@ export const prisma =
         : ['error'],
   });
 
+declare global {
+  // eslint-disable-next-line no-var
+  var prisma: ReturnType<typeof createPrismaClient> | undefined;
+}
+
+export const prisma = globalThis.prisma ?? createPrismaClient();
+
 if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma;
+  globalThis.prisma = prisma;
 }
 
 export const connectDB = async (): Promise<void> => {

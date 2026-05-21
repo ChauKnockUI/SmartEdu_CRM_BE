@@ -96,8 +96,8 @@ export class ClassController {
             const newClass = await classService.createClass({
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
-                teacher_id: teacher_id ? Number(teacher_id) : undefined,
-                room_id: room_id ? Number(room_id) : undefined,
+                teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
+                room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
                 status: status as ClassStatus,
                 start_date: start_date ? new Date(start_date) : undefined,
                 end_date: end_date ? new Date(end_date) : undefined,
@@ -148,8 +148,8 @@ export class ClassController {
             const updatedClass = await classService.updateClass(Number(id), {
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
-                teacher_id: teacher_id ? Number(teacher_id) : undefined,
-                room_id: room_id ? Number(room_id) : undefined,
+                teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
+                room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
                 status: status as ClassStatus,
                 start_date: start_date ? new Date(start_date) : undefined,
                 end_date: end_date ? new Date(end_date) : undefined,
@@ -172,6 +172,14 @@ export class ClassController {
             });
         } catch (error: any) {
             console.error('[ClassController] updateClass error:', error);
+
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
             return res.status(500).json({
                 success: false,
                 message: 'Internal Server Error',

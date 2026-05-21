@@ -1,6 +1,5 @@
-import { PrismaClient, Prisma, LeadStatus, UserRole } from '../generated/prisma';
-
-const prisma = new PrismaClient();
+import { Prisma, LeadStatus, UserRole } from '../generated/prisma';
+import { prisma } from '../database/db';
 
 export class LeadRepository {
     async count(where: Prisma.LeadWhereInput) {

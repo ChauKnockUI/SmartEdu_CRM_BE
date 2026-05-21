@@ -1,4 +1,5 @@
-import { PrismaClient, AttendanceStatus } from '../generated/prisma';
+import { AttendanceStatus } from '../generated/prisma';
+import { prisma } from '../database/db';
 
 export interface AttendanceInput {
     student_id: number;
@@ -13,8 +14,6 @@ export class ScheduleService {
         user_role: string,
         attendances: AttendanceInput[]
     ) {
-        const prisma = new PrismaClient();
-
         // 1. Fetch Schedule and related info
         const schedule = await prisma.schedule.findUnique({
             where: { id: schedule_id },

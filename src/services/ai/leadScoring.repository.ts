@@ -1,6 +1,5 @@
-import { PrismaClient, LeadAiRecommendation, LeadActivityType, PredictionType } from '../../generated/prisma';
-
-const prisma = new PrismaClient();
+import { LeadAiRecommendation, LeadActivityType, PredictionType } from '../../generated/prisma';
+import { prisma } from '../../database/db';
 
 export class LeadScoringRepository {
     async getLeadWithCourse(leadId: number) {

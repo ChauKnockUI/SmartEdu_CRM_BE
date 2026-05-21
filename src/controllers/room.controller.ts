@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { roomService } from '../services/room.service';
+import { classService } from '../services/class.service';
 
 export class RoomController {
     async getRooms(req: Request, res: Response) {
@@ -32,7 +33,7 @@ export class RoomController {
 
     async getAvailableRooms(req: Request, res: Response) {
         try {
-            const { start_date, end_date, schedule_days, schedule_time } = req.query;
+            const { start_date, end_date, schedule_days, schedule_time, class_id } = req.query;
 
             if (!start_date || !end_date || !schedule_days || !schedule_time) {
                 return res.status(400).json({
@@ -53,14 +54,17 @@ export class RoomController {
                 return res.status(400).json({ success: false, message: 'schedule_time không hợp lệ (cần 2 giờ)' });
             }
 
-            // Gọi classService để tận dụng thuật toán rảnh/bận
-            // Lưu ý: Cần import classService ở đầu file
-            const { classService } = require('../services/class.service');
+            const excludeClassId = class_id ? Number(class_id) : undefined;
+            if (excludeClassId !== undefined && isNaN(excludeClassId)) {
+                return res.status(400).json({ success: false, message: 'class_id khÃ´ng há»£p lá»‡' });
+            }
+
             const availableRooms = await classService.getAvailableRooms(
                 new Date(start_date as string),
                 new Date(end_date as string),
                 daysArray,
-                timeArray
+                timeArray,
+                excludeClassId
             );
 
             return res.status(200).json({

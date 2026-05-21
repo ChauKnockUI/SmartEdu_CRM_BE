@@ -4,7 +4,7 @@ import { classService } from '../services/class.service';
 export class TeacherController {
     async getAvailableTeachers(req: Request, res: Response) {
         try {
-            const { start_date, end_date, schedule_days, schedule_time } = req.query;
+            const { start_date, end_date, schedule_days, schedule_time, class_id } = req.query;
 
             if (!start_date || !end_date || !schedule_days || !schedule_time) {
                 return res.status(400).json({
@@ -25,11 +25,17 @@ export class TeacherController {
                 return res.status(400).json({ success: false, message: 'schedule_time không hợp lệ (cần 2 giờ)' });
             }
 
+            const excludeClassId = class_id ? Number(class_id) : undefined;
+            if (excludeClassId !== undefined && isNaN(excludeClassId)) {
+                return res.status(400).json({ success: false, message: 'class_id khÃ´ng há»£p lá»‡' });
+            }
+
             const availableTeachers = await classService.getAvailableTeachers(
                 new Date(start_date as string),
                 new Date(end_date as string),
                 daysArray,
-                timeArray
+                timeArray,
+                excludeClassId
             );
 
             return res.status(200).json({
