@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import { teacherController } from '../controllers/teacher.controller';
-import { authenticate } from '../middlewares/auth.middleware';
+import { authenticate, authorize } from '../middlewares/auth.middleware';
 
 const router = Router();
 
-// Tất cả các route đều cần đăng nhập
 router.use(authenticate);
 
-// Tìm giáo viên rảnh rỗi (Không bị trùng lịch)
+router.get('/', teacherController.getTeachers);
 router.get('/available', teacherController.getAvailableTeachers);
+router.get('/:id/schedule', teacherController.getTeacherSchedule);
+router.get('/:id', teacherController.getTeacherById);
+
+router.post('/', authorize('admin'), teacherController.createTeacher);
+router.put('/:id', authorize('admin'), teacherController.updateTeacher);
+router.post('/:id/reset-password', authorize('admin'), teacherController.resetPassword);
+router.delete('/:id', authorize('admin'), teacherController.deleteTeacher);
 
 export default router;
