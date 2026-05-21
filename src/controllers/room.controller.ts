@@ -2,6 +2,42 @@ import { Request, Response } from 'express';
 import { roomService } from '../services/room.service';
 import { classService } from '../services/class.service';
 
+const parseScheduleDays = (value: unknown): number[] | null => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            const days = parsed.map(Number);
+            return days.every(day => Number.isInteger(day) && day >= 0 && day <= 6) ? days : null;
+        }
+    } catch {
+        // Fallback to comma-separated values below.
+    }
+
+    const days = raw.split(',').map(day => Number(day.trim()));
+    return days.every(day => Number.isInteger(day) && day >= 0 && day <= 6) ? days : null;
+};
+
+const parseScheduleTime = (value: unknown): string[] | null => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            const times = parsed.map(String);
+            return times.length === 2 ? times : null;
+        }
+    } catch {
+        // Fallback to extracting HH:mm values below.
+    }
+
+    const matches = raw.match(/\d{1,2}:\d{2}/g);
+    return matches && matches.length >= 2 ? matches.slice(0, 2) : null;
+};
+
 export class RoomController {
     async getRooms(req: Request, res: Response) {
         try {
@@ -43,14 +79,14 @@ export class RoomController {
             }
 
             // Parse schedule_days: "1,3,5" -> [1, 3, 5]
-            const daysArray = (schedule_days as string).split(',').map(Number);
-            if (daysArray.some(isNaN)) {
+            const daysArray = parseScheduleDays(schedule_days);
+            if (!daysArray) {
                 return res.status(400).json({ success: false, message: 'schedule_days không hợp lệ' });
             }
 
             // Parse schedule_time: "18:00,20:00" -> ["18:00", "20:00"]
-            const timeArray = (schedule_time as string).split(',');
-            if (timeArray.length !== 2) {
+            const timeArray = parseScheduleTime(schedule_time);
+            if (!timeArray) {
                 return res.status(400).json({ success: false, message: 'schedule_time không hợp lệ (cần 2 giờ)' });
             }
 
@@ -73,6 +109,14 @@ export class RoomController {
             });
         } catch (error: any) {
             console.error('[RoomController] getAvailableRooms error:', error);
+
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+
             return res.status(500).json({
                 success: false,
                 message: 'Internal Server Error',

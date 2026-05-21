@@ -27,6 +27,12 @@ export interface CreateClassInput {
 export interface UpdateClassInput extends Partial<CreateClassInput> {}
 
 export class ClassService {
+    private createHttpError(message: string, statusCode: number) {
+        const err = new Error(message);
+        (err as any).statusCode = statusCode;
+        return err;
+    }
+
     async getClasses(query: GetClassesQuery) {
         const { page = 1, limit = 10, search, status, course_id, teacher_id } = query;
         const skip = (page - 1) * limit;
@@ -79,11 +85,31 @@ export class ClassService {
 
     // Helper function to parse HH:mm into Date object (1970-01-01)
     public parseTimeToDate(timeString: string): Date {
-        const [hours, minutes] = timeString.split(':').map(Number);
+        const match = String(timeString).trim().match(/^(\d{1,2}):(\d{2})$/);
+
+        if (!match) {
+            throw this.createHttpError(`Giờ học không hợp lệ: ${timeString}`, 400);
+        }
+
+        const hours = Number(match[1]);
+        const minutes = Number(match[2]);
+
+        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+            throw this.createHttpError(`Giờ học không hợp lệ: ${timeString}`, 400);
+        }
+
         return new Date(Date.UTC(1970, 0, 1, hours, minutes, 0, 0));
     }
 
     public generateScheduleDates(startDate: Date, endDate: Date, scheduleDays: number[]): Date[] {
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+            throw this.createHttpError('Ngày bắt đầu hoặc ngày kết thúc không hợp lệ', 400);
+        }
+
+        if (!scheduleDays.every(day => Number.isInteger(day) && day >= 0 && day <= 6)) {
+            throw this.createHttpError('schedule_days không hợp lệ', 400);
+        }
+
         let currentDate = new Date(startDate);
         const endDt = new Date(endDate);
         const datesToCheck: Date[] = [];
