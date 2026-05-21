@@ -1,6 +1,5 @@
-import { PrismaClient, Prisma } from '../generated/prisma';
-
-const prisma = new PrismaClient();
+import { Prisma } from '../generated/prisma';
+import { prisma } from '../database/db';
 
 export class CourseRepository {
     async findMany(params: {

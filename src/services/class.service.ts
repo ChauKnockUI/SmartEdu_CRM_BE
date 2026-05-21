@@ -1,4 +1,5 @@
 import { Prisma, ClassStatus } from '../generated/prisma';
+import { prisma } from '../database/db';
 import { classRepository } from '../repositories/class.repository';
 
 export interface GetClassesQuery {
@@ -187,10 +188,46 @@ export class ClassService {
         const existing = await classRepository.checkExistence(id);
         if (!existing) return null;
 
-        return await classRepository.update(id, data as Prisma.ClassUncheckedUpdateInput);
+        const classData = data as Prisma.ClassUncheckedUpdateInput;
+        const scheduleData: Prisma.ScheduleUncheckedUpdateManyInput = {};
+
+        if (data.room_id !== undefined) {
+            scheduleData.room_id = data.room_id;
+        }
+
+        if (data.teacher_id !== undefined) {
+            scheduleData.teacher_id = data.teacher_id;
+        }
+
+        if (Object.keys(scheduleData).length > 0) {
+            const schedules = await classRepository.findFutureSchedulesByClassId(id);
+
+            for (const schedule of schedules) {
+                if (!schedule.start_time || !schedule.end_time) continue;
+
+                const conflict = await classRepository.findScheduleResourceConflict(
+                    id,
+                    data.room_id ?? null,
+                    data.teacher_id ?? null,
+                    schedule.date,
+                    schedule.start_time,
+                    schedule.end_time
+                );
+
+                if (conflict) {
+                    const err = new Error('Phòng hoặc giảng viên đã có lịch trùng với lớp khác. Vui lòng chọn lại.');
+                    (err as any).statusCode = 409;
+                    throw err;
+                }
+            }
+
+            return await classRepository.updateWithFutureSchedules(id, classData, scheduleData);
+        }
+
+        return await classRepository.update(id, classData);
     }
 
-    async getAvailableRooms(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[]) {
+    async getAvailableRooms(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[], excludeClassId?: number) {
         if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
         
         const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
@@ -199,24 +236,23 @@ export class ClassService {
 
         if (datesToCheck.length === 0) return [];
 
-        const { conflictingRooms } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb);
+        const { conflictingRooms } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb, excludeClassId);
 
-        // Fetch all active rooms NOT in conflictingRooms (This requires prisma client or a roomRepository method)
-        // Since we are in class.service, we should ideally call room.service, but for simplicity we can just query Prisma directly here
-        // Wait, we can import prisma directly
-        const { PrismaClient } = require('../generated/prisma');
-        const prisma = new PrismaClient();
-        
-        return await prisma.room.findMany({
+        const rooms = await prisma.room.findMany({
             where: {
                 is_active: true,
                 id: { notIn: conflictingRooms }
             },
             select: { id: true, name: true, capacity: true }
         });
+
+        return rooms.map(room => ({
+            ...room,
+            is_available: true
+        }));
     }
 
-    async getAvailableTeachers(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[]) {
+    async getAvailableTeachers(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[], excludeClassId?: number) {
         if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
         
         const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
@@ -225,24 +261,23 @@ export class ClassService {
 
         if (datesToCheck.length === 0) return [];
 
-        const { conflictingTeachers } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb);
+        const { conflictingTeachers } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb, excludeClassId);
 
-        const { PrismaClient } = require('../generated/prisma');
-        const prisma = new PrismaClient();
-        
-        return await prisma.teacher.findMany({
+        const teachers = await prisma.teacher.findMany({
             where: {
-                // assume teacher has status or just all teachers
+                is_active: true,
                 id: { notIn: conflictingTeachers }
             },
-            select: { id: true, user: { select: { full_name: true } } }
+            select: { id: true, full_name: true, email: true }
         });
+
+        return teachers.map(teacher => ({
+            ...teacher,
+            is_available: true
+        }));
     }
 
     async enrollStudents(class_id: number, student_ids: number[]) {
-        const { PrismaClient } = require('../generated/prisma');
-        const prisma = new PrismaClient();
-
         // 1. Lấy thông tin lớp học, sĩ số và lịch học
         const targetClass = await prisma.class.findUnique({
             where: { id: class_id },

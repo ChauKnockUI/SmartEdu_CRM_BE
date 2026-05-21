@@ -1,6 +1,5 @@
-import { PrismaClient, Prisma } from '../generated/prisma';
-
-const prisma = new PrismaClient();
+import { Prisma } from '../generated/prisma';
+import { prisma } from '../database/db';
 
 export class ClassRepository {
     async findMany(params: {
@@ -81,6 +80,83 @@ export class ClassRepository {
         });
     }
 
+    async updateWithFutureSchedules(
+        id: number,
+        classData: Prisma.ClassUncheckedUpdateInput,
+        scheduleData: Prisma.ScheduleUncheckedUpdateManyInput
+    ) {
+        return await prisma.$transaction(async (tx) => {
+            const updatedClass = await tx.class.update({
+                where: { id },
+                data: classData
+            });
+
+            if (Object.keys(scheduleData).length > 0) {
+                await tx.schedule.updateMany({
+                    where: {
+                        class_id: id,
+                        date: { gte: new Date() },
+                        status: { not: 'cancelled' }
+                    },
+                    data: scheduleData
+                });
+            }
+
+            return updatedClass;
+        });
+    }
+
+    async findFutureSchedulesByClassId(id: number) {
+        return await prisma.schedule.findMany({
+            where: {
+                class_id: id,
+                date: { gte: new Date() },
+                status: { not: 'cancelled' }
+            },
+            select: {
+                id: true,
+                date: true,
+                start_time: true,
+                end_time: true
+            }
+        });
+    }
+
+    async findScheduleResourceConflict(
+        classId: number,
+        roomId: number | null,
+        teacherId: number | null,
+        date: Date,
+        startTime: Date,
+        endTime: Date
+    ) {
+        const OR_conditions: Prisma.ScheduleWhereInput[] = [];
+        if (roomId) OR_conditions.push({ room_id: roomId });
+        if (teacherId) OR_conditions.push({ teacher_id: teacherId });
+
+        if (OR_conditions.length === 0) return null;
+
+        return await prisma.schedule.findFirst({
+            where: {
+                class_id: { not: classId },
+                date,
+                OR: OR_conditions,
+                AND: [
+                    { start_time: { lt: endTime } },
+                    { end_time: { gt: startTime } }
+                ]
+            },
+            select: {
+                id: true,
+                date: true,
+                start_time: true,
+                end_time: true,
+                room_id: true,
+                teacher_id: true
+            }
+        });
+    }
+
     async checkExistence(id: number) {
         return await prisma.class.findUnique({
             where: { id },
@@ -107,9 +183,10 @@ export class ClassRepository {
         });
     }
 
-    async findConflictingResources(dates: Date[], startTime: Date, endTime: Date) {
+    async findConflictingResources(dates: Date[], startTime: Date, endTime: Date, excludeClassId?: number) {
         const conflicts = await prisma.schedule.findMany({
             where: {
+                ...(excludeClassId ? { class_id: { not: excludeClassId } } : {}),
                 date: { in: dates },
                 AND: [
                     { start_time: { lt: endTime } },
