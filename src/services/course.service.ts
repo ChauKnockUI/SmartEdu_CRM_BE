@@ -1,5 +1,6 @@
 import { Prisma } from '../generated/prisma';
 import { courseRepository } from '../repositories/course.repository';
+import { prisma } from '../database/db';
 
 export interface GetCoursesQuery {
     page?: number;
@@ -85,6 +86,23 @@ export class CourseService {
 
         await courseRepository.softDelete(id);
         return true;
+    }
+
+    async getClasses(courseId: number) {
+        return await prisma.class.findMany({
+            where: {
+                course_id: courseId,
+            },
+            include: {
+                teacher: true,
+                room: true,
+                _count: {
+                    select: {
+                        classEnrollments: true,
+                    }
+                }
+            }
+        });
     }
 }
 
