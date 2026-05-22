@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { studentController } from '../controllers/student.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
+import { invoiceController } from '../controllers/invoice.controller';
 
 const router = Router();
 
@@ -11,6 +12,7 @@ router.use(authenticate);
 router.get('/', studentController.getStudents);
 
 // Lấy chi tiết học viên
+router.get('/:id/invoices', invoiceController.getStudentInvoices);
 router.get('/:id', studentController.getStudentById);
 
 // ─── Các tác vụ thay đổi dữ liệu yêu cầu quyền Admin hoặc Sale ──────────────

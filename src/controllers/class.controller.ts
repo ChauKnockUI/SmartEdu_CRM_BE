@@ -66,7 +66,7 @@ export class ClassController {
     async createClass(req: Request, res: Response) {
         try {
             const { 
-                name, course_id, teacher_id, room_id, status, 
+                name, course_id, fee_plan_id, teacher_id, room_id, status, 
                 start_date, end_date, schedule_days, schedule_time, max_students 
             } = req.body;
 
@@ -96,6 +96,7 @@ export class ClassController {
             const newClass = await classService.createClass({
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
+                fee_plan_id: fee_plan_id ? Number(fee_plan_id) : undefined,
                 teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
                 room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
                 status: status as ClassStatus,
@@ -134,7 +135,7 @@ export class ClassController {
         try {
             const { id } = req.params;
             const { 
-                name, course_id, teacher_id, room_id, status, 
+                name, course_id, fee_plan_id, teacher_id, room_id, status, 
                 start_date, end_date, schedule_days, schedule_time, max_students 
             } = req.body;
 
@@ -148,6 +149,7 @@ export class ClassController {
             const updatedClass = await classService.updateClass(Number(id), {
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
+                fee_plan_id: fee_plan_id ? Number(fee_plan_id) : undefined,
                 teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
                 room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
                 status: status as ClassStatus,

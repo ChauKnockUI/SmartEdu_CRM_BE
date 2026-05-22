@@ -1,6 +1,7 @@
 import { Prisma, ClassStatus } from '../generated/prisma';
 import { prisma } from '../database/db';
 import { classRepository } from '../repositories/class.repository';
+import { invoiceService } from './invoice.service';
 
 export interface GetClassesQuery {
     page?: number;
@@ -14,6 +15,7 @@ export interface GetClassesQuery {
 export interface CreateClassInput {
     name: string;
     course_id?: number;
+    fee_plan_id?: number;
     teacher_id?: number;
     room_id?: number;
     status?: ClassStatus;
@@ -401,6 +403,17 @@ export class ClassService {
             await prisma.classEnrollment.createMany({
                 data: dataToInsert
             });
+
+            for (const studentId of successful_ids) {
+                invoiceService.createInvoiceFromClass({
+                    class_id,
+                    student_id: studentId,
+                    due_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+                    notes: 'Auto-created when student was enrolled into class',
+                }).catch((error) => {
+                    console.error(`[ClassService] Auto invoice failed for student ${studentId} in class ${class_id}:`, error.message);
+                });
+            }
         }
 
         return {

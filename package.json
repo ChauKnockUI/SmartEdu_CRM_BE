@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "seed:finance": "tsx prisma/seed-finance.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
