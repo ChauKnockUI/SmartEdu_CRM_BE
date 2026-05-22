@@ -13,7 +13,6 @@ CREATE TABLE "invoices" (
     "notes" TEXT,
     "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(6) NOT NULL,
-
     CONSTRAINT "invoices_pkey" PRIMARY KEY ("id")
 );
 
@@ -25,7 +24,6 @@ CREATE TABLE "invoice_items" (
     "amount" DECIMAL(15,2) NOT NULL,
     "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(6) NOT NULL,
-
     CONSTRAINT "invoice_items_pkey" PRIMARY KEY ("id")
 );
 
@@ -40,7 +38,6 @@ CREATE TABLE "payment_transactions" (
     "notes" TEXT,
     "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(6) NOT NULL,
-
     CONSTRAINT "payment_transactions_pkey" PRIMARY KEY ("id")
 );
 
@@ -54,7 +51,6 @@ CREATE TABLE "receipts" (
     "notes" TEXT,
     "createdAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(6) NOT NULL,
-
     CONSTRAINT "receipts_pkey" PRIMARY KEY ("id")
 );
 
@@ -63,13 +59,10 @@ CREATE INDEX "invoices_student_id_idx" ON "invoices"("student_id");
 CREATE INDEX "invoices_class_id_idx" ON "invoices"("class_id");
 CREATE INDEX "invoices_status_idx" ON "invoices"("status");
 CREATE INDEX "invoices_due_date_idx" ON "invoices"("due_date");
-
 CREATE INDEX "invoice_items_invoice_id_idx" ON "invoice_items"("invoice_id");
-
 CREATE INDEX "payment_transactions_invoice_id_idx" ON "payment_transactions"("invoice_id");
 CREATE INDEX "payment_transactions_paid_at_idx" ON "payment_transactions"("paid_at");
 CREATE INDEX "payment_transactions_received_by_idx" ON "payment_transactions"("received_by");
-
 CREATE UNIQUE INDEX "receipts_receipt_no_key" ON "receipts"("receipt_no");
 CREATE INDEX "receipts_invoice_id_idx" ON "receipts"("invoice_id");
 CREATE INDEX "receipts_transaction_id_idx" ON "receipts"("transaction_id");

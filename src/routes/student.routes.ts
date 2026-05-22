@@ -2,41 +2,22 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { studentController } from '../controllers/student.controller';
 import { invoiceController } from '../controllers/invoice.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
-import { prisma } from '../database/db';
+import { invoiceController } from '../controllers/invoice.controller';
 
 const router = Router();
 
 router.use(authenticate);
 
-const authorizeStudentSelfOrStaff = async (req: Request, res: Response, next: NextFunction) => {
-  const role = req.user?.role;
+// Lấy danh sách học viên (Có tìm kiếm, phân trang, lọc nợ học phí)
+router.get('/', studentController.getStudents);
 
-  if (role === 'admin' || role === 'sale') {
-    next();
-    return;
-  }
+// Lấy chi tiết học viên
+router.get('/:id/invoices', invoiceController.getStudentInvoices);
+router.get('/:id', studentController.getStudentById);
 
-  if (role === 'student') {
-    const student = await prisma.student.findUnique({
-      where: { id: Number(req.params.id) },
-      select: { user_id: true },
-    });
+// ─── Các tác vụ thay đổi dữ liệu yêu cầu quyền Admin hoặc Sale ──────────────
 
-    if (student?.user_id === req.user?.userId) {
-      next();
-      return;
-    }
-  }
-
-  res.status(403).json({
-    success: false,
-    message: 'You do not have permission to access this student resource',
-  });
-};
-
-router.get('/', authorize('admin', 'sale', 'teacher'), studentController.getStudents);
-router.get('/:id/invoices', authorizeStudentSelfOrStaff, invoiceController.getStudentInvoices);
-router.get('/:id', authorizeStudentSelfOrStaff, studentController.getStudentById);
+// Tạo học viên mới (Đồng thời tạo User + Sinh mật khẩu ngẫu nhiên)
 router.post('/', authorize('admin', 'sale'), studentController.createStudent);
 router.put('/:id', authorize('admin', 'sale'), studentController.updateStudent);
 router.post('/:id/reset-password', authorize('admin', 'sale'), studentController.resetPassword);

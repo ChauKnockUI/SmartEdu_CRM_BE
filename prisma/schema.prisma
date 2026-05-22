@@ -138,6 +138,7 @@ model Course {
   createdAt      DateTime @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime @updatedAt @db.Timestamptz(6)
   classes        Class[]
+  feePlans       FeePlan[]
   leads          Lead[]   @relation("LeadCourseInterested")
 
   @@map("courses")
@@ -147,6 +148,7 @@ model Class {
   id               Int               @id @default(autoincrement())
   name             String            @db.VarChar(255)
   course_id        Int?
+  fee_plan_id      Int?
   teacher_id       Int?
   room_id          Int?
   status           ClassStatus       @default(upcoming)
@@ -159,6 +161,7 @@ model Class {
   updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
   classEnrollments ClassEnrollment[]
   course           Course?           @relation(fields: [course_id], references: [id])
+  feePlan          FeePlan?          @relation(fields: [fee_plan_id], references: [id])
   invoices         Invoice[]
   room             Room?             @relation(fields: [room_id], references: [id])
   teacher          Teacher?          @relation(fields: [teacher_id], references: [id])
@@ -168,9 +171,43 @@ model Class {
 
   @@index([status])
   @@index([course_id])
+  @@index([fee_plan_id])
   @@index([teacher_id])
   @@index([room_id])
   @@map("classes")
+}
+
+model FeePlan {
+  id          Int           @id @default(autoincrement())
+  course_id   Int?
+  name        String        @db.VarChar(255)
+  description String?
+  is_default  Boolean       @default(false)
+  is_active   Boolean       @default(true)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(6)
+  classes     Class[]
+  course      Course?       @relation(fields: [course_id], references: [id])
+  items       FeePlanItem[]
+
+  @@index([course_id])
+  @@index([is_active])
+  @@map("fee_plans")
+}
+
+model FeePlanItem {
+  id          Int             @id @default(autoincrement())
+  fee_plan_id Int
+  type        InvoiceItemType @default(tuition)
+  description String          @db.VarChar(255)
+  amount      Decimal         @db.Decimal(15, 2)
+  sort_order  Int             @default(0)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
+  feePlan     FeePlan         @relation(fields: [fee_plan_id], references: [id], onDelete: Cascade)
+
+  @@index([fee_plan_id])
+  @@map("fee_plan_items")
 }
 
 model ClassEnrollment {
