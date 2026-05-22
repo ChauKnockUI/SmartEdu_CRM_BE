@@ -23,6 +23,8 @@ model User {
   leadActivities  LeadActivity[]
   assignedLeads   Lead[]         @relation("LeadAssignee")
   createdPayments Payment[]      @relation("PaymentCreator")
+  receivedPayments PaymentTransaction[] @relation("PaymentReceiver")
+  issuedReceipts   Receipt[]      @relation("ReceiptIssuer")
   student         Student?
   teacher         Teacher?
 
@@ -95,6 +97,7 @@ model Student {
   updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
   attendances        Attendance[]
   classEnrollments   ClassEnrollment[]
+  invoices           Invoice[]
   payments           Payment[]
   lead               Lead?             @relation(fields: [lead_id], references: [id])
   user               User?             @relation(fields: [user_id], references: [id])
@@ -156,6 +159,7 @@ model Class {
   updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
   classEnrollments ClassEnrollment[]
   course           Course?           @relation(fields: [course_id], references: [id])
+  invoices         Invoice[]
   room             Room?             @relation(fields: [room_id], references: [id])
   teacher          Teacher?          @relation(fields: [teacher_id], references: [id])
   payments         Payment[]
@@ -294,6 +298,86 @@ model Payment {
   @@map("payments")
 }
 
+model Invoice {
+  id              Int                  @id @default(autoincrement())
+  invoice_no      String               @unique @db.VarChar(50)
+  student_id      Int
+  class_id        Int?
+  total_amount    Decimal              @db.Decimal(15, 2)
+  discount_amount Decimal              @default(0) @db.Decimal(15, 2)
+  due_date        DateTime?            @db.Date
+  status          InvoiceStatus        @default(pending)
+  notes           String?
+  createdAt       DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @db.Timestamptz(6)
+  class           Class?               @relation(fields: [class_id], references: [id])
+  items           InvoiceItem[]
+  payments        PaymentTransaction[]
+  receipts        Receipt[]
+  student         Student              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@index([student_id])
+  @@index([class_id])
+  @@index([status])
+  @@index([due_date])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          Int             @id @default(autoincrement())
+  invoice_id  Int
+  type        InvoiceItemType @default(tuition)
+  description String          @db.VarChar(255)
+  amount      Decimal         @db.Decimal(15, 2)
+  createdAt   DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
+  invoice     Invoice         @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+
+  @@index([invoice_id])
+  @@map("invoice_items")
+}
+
+model PaymentTransaction {
+  id             Int           @id @default(autoincrement())
+  invoice_id     Int
+  amount         Decimal       @db.Decimal(15, 2)
+  method         PaymentMethod @default(cash)
+  paid_at        DateTime      @default(now()) @db.Timestamptz(6)
+  reference_code String?       @db.VarChar(100)
+  received_by    Int?
+  notes          String?
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
+  invoice        Invoice       @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  receiver       User?         @relation("PaymentReceiver", fields: [received_by], references: [id])
+  receipts       Receipt[]
+
+  @@index([invoice_id])
+  @@index([paid_at])
+  @@index([received_by])
+  @@map("payment_transactions")
+}
+
+model Receipt {
+  id             Int                 @id @default(autoincrement())
+  receipt_no     String              @unique @db.VarChar(50)
+  invoice_id     Int
+  transaction_id Int?
+  issued_at      DateTime            @default(now()) @db.Timestamptz(6)
+  issued_by      Int?
+  notes          String?
+  createdAt      DateTime            @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime            @updatedAt @db.Timestamptz(6)
+  invoice        Invoice             @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  issuer         User?               @relation("ReceiptIssuer", fields: [issued_by], references: [id])
+  transaction    PaymentTransaction? @relation(fields: [transaction_id], references: [id])
+
+  @@index([invoice_id])
+  @@index([transaction_id])
+  @@index([issued_at])
+  @@map("receipts")
+}
+
 /// Audit logging table for all raw AI prediction requests/responses.
 /// Unlike LeadAiScore which is meant for UI display and business logic, 
 /// AIPrediction acts as an append-only historical log for Model Monitoring and Calibration.
@@ -420,6 +504,23 @@ enum PaymentStatus {
   pending
   paid
   refunded
+}
+
+enum InvoiceStatus {
+  pending
+  partial
+  paid
+  overdue
+  cancelled
+  refunded
+}
+
+enum InvoiceItemType {
+  tuition
+  registration
+  material
+  exam
+  other
 }
 
 enum PredictionType {

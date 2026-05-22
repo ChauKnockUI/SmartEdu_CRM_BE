@@ -59,21 +59,9 @@ export class StudentService {
         }
 
         if (has_debt !== undefined) {
-            if (has_debt) {
-                // Có nợ: Có ít nhất 1 payment trạng thái pending
-                where.payments = {
-                    some: {
-                        status: 'pending'
-                    }
-                };
-            } else {
-                // Không nợ: Mọi payment đều không phải pending
-                where.payments = {
-                    none: {
-                        status: 'pending'
-                    }
-                };
-            }
+            where.invoices = has_debt
+                ? { some: { status: { in: ['pending', 'partial', 'overdue'] } } }
+                : { none: { status: { in: ['pending', 'partial', 'overdue'] } } };
         }
 
         const [total, students] = await Promise.all([
