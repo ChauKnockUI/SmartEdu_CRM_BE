@@ -1,23 +1,23 @@
 import express from 'express';
 import cors from 'cors';
 import { router } from './routes';
+import { env } from './config/env';
+import { errorHandler, notFoundHandler } from './middlewares/error.middleware';
+import { requestLogger } from './middlewares/requestLogger.middleware';
 
 const app = express();
 
-// ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: env.FRONTEND_URL,
   credentials: true,
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(requestLogger);
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
-app.use('/api', router);
-
-// ─── Health Check ─────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
   res.json({
+    success: true,
     status: 'ok',
     message: 'SmartEdu CRM API',
     version: '1.0.0',
@@ -25,9 +25,16 @@ app.get('/', (_req, res) => {
   });
 });
 
-// ─── 404 Handler ─────────────────────────────────────────────────────────────
-app.use((_req, res) => {
-  res.status(404).json({ status: 'error', message: 'Route not found' });
+app.get('/health', (_req, res) => {
+  res.json({
+    success: true,
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+  });
 });
+
+app.use('/api', router);
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 export { app };

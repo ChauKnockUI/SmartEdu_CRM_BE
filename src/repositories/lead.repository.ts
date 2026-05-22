@@ -2,6 +2,15 @@ import { Prisma, LeadStatus, UserRole } from '../generated/prisma';
 import { prisma } from '../database/db';
 
 export class LeadRepository {
+    private buildInvoiceNo() {
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        const dd = String(now.getDate()).padStart(2, '0');
+        const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+        return `INV-${yyyy}${mm}${dd}-${random}`;
+    }
+
     async count(where: Prisma.LeadWhereInput) {
         return await prisma.lead.count({ where });
     }
@@ -114,6 +123,8 @@ export class LeadRepository {
                 full_name: true,
                 phone: true,
                 email: true,
+                course_id: true,
+                course: { select: { id: true, name: true, fee: true } },
                 status: true,
                 student: { select: { id: true } } // Kiểm tra đã convert trước đó chưa
             }
@@ -135,6 +146,8 @@ export class LeadRepository {
         phone?: string | null;
         email: string;
         password_hash: string;
+        course_id?: number | null;
+        course?: { id: number; name: string; fee: Prisma.Decimal | null } | null;
     }) {
         return await prisma.$transaction(async (tx) => {
             // BƯỚC 1: Tạo User account với role student
@@ -175,6 +188,29 @@ export class LeadRepository {
                 where: { id: params.lead_id },
                 data: { status: LeadStatus.enrolled }
             });
+
+            if (params.course?.fee) {
+                const dueDate = new Date();
+                dueDate.setDate(dueDate.getDate() + 7);
+
+                await tx.invoice.create({
+                    data: {
+                        invoice_no: this.buildInvoiceNo(),
+                        student_id: newStudent.id,
+                        total_amount: params.course.fee,
+                        discount_amount: 0,
+                        due_date: dueDate,
+                        notes: `Auto-created from Lead #${params.lead_id}`,
+                        items: {
+                            create: [{
+                                type: 'tuition',
+                                description: `Tuition fee - ${params.course.name}`,
+                                amount: params.course.fee,
+                            }],
+                        },
+                    },
+                });
+            }
 
             return newStudent;
         });

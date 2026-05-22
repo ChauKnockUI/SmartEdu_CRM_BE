@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { Prisma, LeadStatus, LeadActivityType } from '../generated/prisma';
 import { leadScoringService } from './ai/leadScoring.service';
 import { leadRepository } from '../repositories/lead.repository';
@@ -351,7 +352,7 @@ export class LeadService {
         // 5. Sinh password_hash ngẫu nhiên (rác) — vị sau sẽ thay bằng bcrypt hash thật
         // Nhưng KHAI BÁO RÕ trong code để không trở thành security debt im lặng
         const rawTempPassword = crypto.randomBytes(16).toString('hex');
-        const password_hash = `TEMP_UNHASHED_${rawTempPassword}`; // TODO: thay bằng bcrypt.hash()
+        const password_hash = await bcrypt.hash(rawTempPassword, 12);
 
         // 6. Gần toàn bộ transaction cho Repository (Single Responsibility)
         const newStudent = await leadRepository.convertLeadToStudent({
@@ -360,6 +361,8 @@ export class LeadService {
             phone: lead.phone,
             email: resolvedEmail,
             password_hash,
+            course_id: lead.course_id,
+            course: lead.course,
         });
 
         return newStudent;
