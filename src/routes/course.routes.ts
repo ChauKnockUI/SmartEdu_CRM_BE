@@ -7,6 +7,9 @@ const router = Router();
 // Tất cả các route đều cần đăng nhập
 router.use(authenticate);
 
+// Lấy danh sách lớp học của khóa học
+router.get('/:id/classes', courseController.getClasses);
+
 // Lấy danh sách khóa học (có phân trang, search) - Bất kỳ role nào đã đăng nhập đều xem được
 router.get('/', courseController.getCourses);
 

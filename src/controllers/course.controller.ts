@@ -27,7 +27,7 @@ export class CourseController {
     async getCourseById(req: Request, res: Response) {
         try {
             const { id } = req.params;
-            
+
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -164,6 +164,24 @@ export class CourseController {
                 success: false,
                 message: 'Internal Server Error',
                 error: error.message
+            });
+        }
+    }
+
+    async getClasses(req: Request, res: Response) {
+        try {
+            const courseId = Number(req.params.id);
+
+            const classes = await courseService.getClasses(courseId);
+
+            res.json({
+                success: true,
+                data: classes,
+            });
+        } catch (error: any) {
+            res.status(500).json({
+                success: false,
+                message: error.message,
             });
         }
     }
