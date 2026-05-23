@@ -26,7 +26,7 @@ export interface CreateClassInput {
     max_students?: number;
 }
 
-export interface UpdateClassInput extends Partial<CreateClassInput> {}
+export interface UpdateClassInput extends Partial<CreateClassInput> { }
 
 export class ClassService {
     private createHttpError(message: string, statusCode: number) {
@@ -112,17 +112,36 @@ export class ClassService {
             throw this.createHttpError('schedule_days không hợp lệ', 400);
         }
 
-        let currentDate = new Date(startDate);
-        const endDt = new Date(endDate);
-        const datesToCheck: Date[] = [];
+        const dates: Date[] = [];
 
-        while (currentDate <= endDt) {
-            if (scheduleDays.includes(currentDate.getDay())) {
-                datesToCheck.push(new Date(currentDate));
+        let y = startDate.getUTCFullYear();
+        let m = startDate.getUTCMonth();
+        let d = startDate.getUTCDate();
+
+        const endY = endDate.getUTCFullYear();
+        const endM = endDate.getUTCMonth();
+        const endD = endDate.getUTCDate();
+
+        while (true) {
+            const current = new Date(Date.UTC(y, m, d));
+            if (
+                current.getUTCFullYear() > endY ||
+                (current.getUTCFullYear() === endY && current.getUTCMonth() > endM) ||
+                (current.getUTCFullYear() === endY && current.getUTCMonth() === endM && current.getUTCDate() > endD)
+            ) break;
+
+            if (scheduleDays.includes(current.getUTCDay())) {
+                dates.push(current);
             }
-            currentDate.setDate(currentDate.getDate() + 1);
+
+            d++;
+            const next = new Date(Date.UTC(y, m, d));
+            y = next.getUTCFullYear();
+            m = next.getUTCMonth();
+            d = next.getUTCDate();
         }
-        return datesToCheck;
+
+        return dates;
     }
 
     async createClass(data: CreateClassInput) {
@@ -162,10 +181,10 @@ export class ClassService {
             // 1. Kiểm tra trùng lịch Phòng học
             if (data.room_id) {
                 const roomConflict = await classRepository.checkScheduleConflict(
-                    data.room_id, 
-                    null, 
-                    datesToCheck, 
-                    startTimeDb, 
+                    data.room_id,
+                    null,
+                    datesToCheck,
+                    startTimeDb,
                     endTimeDb
                 );
 
@@ -181,10 +200,10 @@ export class ClassService {
             // 2. Kiểm tra trùng lịch Giáo viên
             if (data.teacher_id) {
                 const teacherConflict = await classRepository.checkScheduleConflict(
-                    null, 
-                    data.teacher_id, 
-                    datesToCheck, 
-                    startTimeDb, 
+                    null,
+                    data.teacher_id,
+                    datesToCheck,
+                    startTimeDb,
                     endTimeDb
                 );
 
@@ -257,7 +276,7 @@ export class ClassService {
 
     async getAvailableRooms(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[], excludeClassId?: number) {
         if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
-        
+
         const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
         const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
         const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
@@ -282,7 +301,7 @@ export class ClassService {
 
     async getAvailableTeachers(startDate: Date, endDate: Date, scheduleDays: number[], scheduleTime: string[], excludeClassId?: number) {
         if (scheduleTime.length !== 2) throw new Error('Invalid schedule_time');
-        
+
         const startTimeDb = this.parseTimeToDate(scheduleTime[0]);
         const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
         const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
@@ -350,7 +369,7 @@ export class ClassService {
         });
 
         const targetSchedules = targetClass.schedules;
-        
+
         for (const s_id of student_ids) {
             // Check Duplicate
             const isDuplicate = targetClass.classEnrollments.some((e: any) => e.student_id === s_id);
@@ -366,14 +385,14 @@ export class ClassService {
             for (const enrollment of myEnrollments) {
                 if (hasConflict) break;
                 const existingSchedules = enrollment.class.schedules;
-                
+
                 for (const newSch of targetSchedules) {
                     if (hasConflict) break;
                     if (!newSch.start_time || !newSch.end_time) continue;
-                    
+
                     for (const exSch of existingSchedules) {
                         if (!exSch.start_time || !exSch.end_time) continue;
-                        
+
                         // So sánh ngày
                         if (newSch.date.getTime() === exSch.date.getTime()) {
                             // So sánh giờ: (StartA < EndB) && (EndA > StartB)
