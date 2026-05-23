@@ -17,6 +17,9 @@ export class ClassRepository {
                 room: {
                     select: { id: true, name: true }
                 },
+                teacher: {
+                select: { id: true, full_name: true }
+                },
                 _count: {
                     select: { classEnrollments: true }
                 }
@@ -37,6 +40,19 @@ export class ClassRepository {
                 teacher: true,
                 _count: {
                     select: { classEnrollments: true }
+                },
+                classEnrollments: {
+                    include: {
+                        student: {
+                            select: {
+                                id: true,
+                                full_name: true,
+                                email: true,
+                                phone: true,
+                            }
+                        }
+                    },
+                    orderBy: { createdAt: 'desc' }
                 }
             }
         });
