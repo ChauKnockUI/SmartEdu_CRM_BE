@@ -7,6 +7,7 @@ import classRouter from './class.routes';
 import teacherRouter from './teacher.routes';
 import studentRouter from './student.routes';
 import scheduleRouter from './schedule.routes';
+import attendanceRouter from './attendance.routes';
 import invoiceRouter from './invoice.routes';
 import financeRouter from './finance.routes';
 
@@ -40,6 +41,9 @@ router.use('/students', studentRouter);
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
 router.use('/schedules', scheduleRouter);
+
+// ─── Attendance ────────────────────────────────────────────────────────────────
+router.use('/attendance', attendanceRouter);
 
 router.use('/invoices', invoiceRouter);
 router.use('/finance', financeRouter);

@@ -88,6 +88,63 @@ export class ScheduleService {
 
         return { success: true };
     }
+
+    async getMySchedules(user_id: number, role: string) {
+        if (role === 'teacher') {
+            return prisma.schedule.findMany({
+                where: {
+                    class: {
+                        teacher: {
+                            user_id,
+                        },
+                    },
+                },
+                include: {
+                    class: true,
+                    room: true,
+                    attendances: true,
+                },
+                orderBy: {
+                    date: 'asc',
+                },
+            });
+        }
+
+        if (role === 'student') {
+            return prisma.schedule.findMany({
+                where: {
+                    class: {
+                        classEnrollments: {
+                            some: {
+                                student: {
+                                    user_id,
+                                },
+                            },
+                        },
+                    },
+                },
+                include: {
+                    class: true,
+                    room: true,
+                    attendances: true,
+                },
+                orderBy: {
+                    date: 'asc',
+                },
+            });
+        }
+
+        return prisma.schedule.findMany({
+            include: {
+                class: true,
+                room: true,
+                attendances: true,
+            },
+            orderBy: {
+                date: 'asc',
+            },
+        });
+    }
 }
 
 export const scheduleService = new ScheduleService();
