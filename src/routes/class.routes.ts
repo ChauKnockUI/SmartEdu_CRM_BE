@@ -18,6 +18,7 @@ router.get('/:id', classController.getClassById);
 
 router.get('/:classId/assignments', authorize('admin', 'teacher'), assignmentController.getClassAssignments);
 router.post('/:classId/assignments', authorize('admin', 'teacher'), assignmentController.createAssignment);
+router.post('/:id/dropout-risk/score', authorize('admin', 'teacher'), classController.scoreDropoutRisk);
 
 // ─── Các API sửa đổi dữ liệu cần Role Admin ────────────────────────────────
 

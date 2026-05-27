@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { classService } from '../services/class.service';
+import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { ClassStatus } from '../generated/prisma';
 
 export class ClassController {
@@ -253,6 +254,34 @@ export class ClassController {
                 success: false,
                 message: 'Internal Server Error',
                 error: error.message
+            });
+        }
+    }
+
+    async scoreDropoutRisk(req: Request, res: Response) {
+        try {
+            const classId = Number(req.params.id);
+
+            if (!classId || isNaN(classId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID lớp học không hợp lệ'
+                });
+            }
+
+            const results = await dropoutRiskService.scoreClass(classId);
+            const successCount = results.filter((item: any) => item.success).length;
+
+            return res.status(200).json({
+                success: true,
+                message: `Đã cập nhật dropout risk cho ${successCount}/${results.length} học viên`,
+                data: results
+            });
+        } catch (error: any) {
+            console.error('[ClassController] scoreDropoutRisk error:', error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || 'Không tính được dropout risk cho lớp'
             });
         }
     }
