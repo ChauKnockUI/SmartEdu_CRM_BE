@@ -41,40 +41,55 @@ export const register = async (
     const isActive = assignedRole === 'student';
 
     // 3. Tạo user trong database
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password_hash,
-        full_name,
-        phone,
-        role: assignedRole,
-        is_active: isActive,
-      },
-      select: {
-        // Chỉ trả về các field cần thiết, KHÔNG trả về password_hash
-        id: true,
-        email: true,
-        full_name: true,
-        phone: true,
-        role: true,
-        avatar_url: true,
-        is_active: true,
-        createdAt: true,
-      },
-    });
-
-    // Nếu không phải student (chưa được duyệt), không trả về token
-    if (!isActive) {
-      res.status(201).json({
-        status: 'success',
-        message: 'Đăng ký thành công. Vui lòng chờ quản trị viên duyệt tài khoản của bạn.',
+    const user = await prisma.$transaction(async (tx) => {
+      const newUser = await tx.user.create({
         data: {
-          user,
-          token: null,
+          email,
+          password_hash,
+          full_name,
+          phone,
+          role: assignedRole,
+          is_active: isActive,
+        },
+        select: {
+          id: true,
+          email: true,
+          full_name: true,
+          phone: true,
+          role: true,
+          avatar_url: true,
+          is_active: true,
+          createdAt: true,
         },
       });
-      return;
-    }
+
+      if (assignedRole === 'student') {
+        await tx.student.create({
+          data: {
+            user: { connect: { id: newUser.id } },
+            full_name,
+            email,
+            phone: phone ?? null,
+            status: 'active',
+            enrollment_date: new Date(),
+          },
+        });
+      }
+
+      if (assignedRole === 'teacher') {
+        await tx.teacher.create({
+          data: {
+            user: { connect: { id: newUser.id } },
+            full_name,
+            email,
+            phone: phone ?? null,
+            is_active: false,
+          },
+        });
+      }
+
+      return newUser;
+    });
 
     // 4. Sinh JWT token cho tài khoản đã active (student)
     const token = generateToken({
