@@ -86,6 +86,34 @@ export class ScheduleController {
             });
         }
     }
+
+    async getByClass(req: Request, res: Response) {
+        try {
+            const class_id = parseInt(req.params.classId);
+ 
+            if (isNaN(class_id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID lớp học không hợp lệ'
+                });
+            }
+ 
+            const data = await scheduleService.getByClass(class_id);
+ 
+            return res.status(200).json({
+                success: true,
+                data
+            });
+ 
+        } catch (error: any) {
+            console.error('[ScheduleController] getByClass error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Internal Server Error',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const scheduleController = new ScheduleController();

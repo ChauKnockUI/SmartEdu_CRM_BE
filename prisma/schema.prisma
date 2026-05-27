@@ -10,23 +10,24 @@ datasource db {
 }
 
 model User {
-  id              Int            @id @default(autoincrement())
-  email           String         @unique @db.VarChar(255)
-  password_hash   String         @db.VarChar(255)
-  full_name       String         @db.VarChar(255)
-  phone           String?        @db.VarChar(20)
-  role            UserRole       @default(sale)
-  avatar_url      String?        @db.VarChar(500)
-  is_active       Boolean        @default(true)
-  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
-  updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
-  leadActivities  LeadActivity[]
-  assignedLeads   Lead[]         @relation("LeadAssignee")
-  createdPayments Payment[]      @relation("PaymentCreator")
+  id               Int                  @id @default(autoincrement())
+  email            String               @unique @db.VarChar(255)
+  password_hash    String               @db.VarChar(255)
+  full_name        String               @db.VarChar(255)
+  phone            String?              @db.VarChar(20)
+  role             UserRole             @default(sale)
+  avatar_url       String?              @db.VarChar(500)
+  is_active        Boolean              @default(true)
+  createdAt        DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(6)
+  class_materials  class_materials[]
+  leadActivities   LeadActivity[]
+  assignedLeads    Lead[]               @relation("LeadAssignee")
   receivedPayments PaymentTransaction[] @relation("PaymentReceiver")
-  issuedReceipts   Receipt[]      @relation("ReceiptIssuer")
-  student         Student?
-  teacher         Teacher?
+  createdPayments  Payment[]            @relation("PaymentCreator")
+  issuedReceipts   Receipt[]            @relation("ReceiptIssuer")
+  student          Student?
+  teacher          Teacher?
 
   @@index([role])
   @@index([is_active])
@@ -34,25 +35,25 @@ model User {
 }
 
 model Lead {
-  id                Int            @id @default(autoincrement())
-  full_name         String         @db.VarChar(255)
-  phone             String?        @db.VarChar(20)
-  email             String?        @db.VarChar(255)
-  lead_source       String?        @default("other") @db.VarChar(255)
-  occupation        String?        @db.VarChar(255)
-  study_purpose     String?        @db.VarChar(255)
-  course_id         Int?
-  status            LeadStatus     @default(new)
-  assigned_to       Int?
-  notes             String?
-  last_contacted    DateTime?      @db.Timestamptz(6)
-  createdAt         DateTime       @default(now()) @db.Timestamptz(6)
-  updatedAt         DateTime       @updatedAt @db.Timestamptz(6)
-  activities        LeadActivity[]
-  assignedUser      User?          @relation("LeadAssignee", fields: [assigned_to], references: [id])
-  student           Student?
-  course            Course?        @relation("LeadCourseInterested", fields: [course_id], references: [id])
-  aiScore           LeadAiScore?
+  id             Int            @id @default(autoincrement())
+  full_name      String         @db.VarChar(255)
+  phone          String?        @db.VarChar(20)
+  email          String?        @db.VarChar(255)
+  status         LeadStatus     @default(new)
+  assigned_to    Int?
+  notes          String?
+  last_contacted DateTime?      @db.Timestamptz(6)
+  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @db.Timestamptz(6)
+  course_id      Int?
+  lead_source    String?        @default("other") @db.VarChar(255)
+  occupation     String?        @db.VarChar(255)
+  study_purpose  String?        @db.VarChar(255)
+  activities     LeadActivity[]
+  aiScore        LeadAiScore?
+  assignedUser   User?          @relation("LeadAssignee", fields: [assigned_to], references: [id])
+  course         Course?        @relation("LeadCourseInterested", fields: [course_id], references: [id])
+  student        Student?
 
   @@index([status])
   @@index([lead_source])
@@ -68,15 +69,14 @@ model LeadActivity {
   user_id           Int?
   type              LeadActivityType
   content           String?
-  // Frontend/Backend suggestion: "connected", "busy_call_back", "no_answer", "wrong_number", "not_interested"
+  createdAt         DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime         @updatedAt @db.Timestamptz(6)
   engagement_status String?          @db.VarChar(255)
-  createdAt DateTime         @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime         @updatedAt @db.Timestamptz(6)
-  lead      Lead             @relation(fields: [lead_id], references: [id], onDelete: Cascade)
-  user      User?            @relation(fields: [user_id], references: [id])
+  lead              Lead             @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  user              User?            @relation(fields: [user_id], references: [id])
 
-  @@index([lead_id, type]) // Optimize for: count Call_Attempt_Count
-  @@index([lead_id, createdAt]) // Optimize for: get Last_Engagement_Status
+  @@index([lead_id, type])
+  @@index([lead_id, createdAt])
   @@index([user_id])
   @@map("lead_activities")
 }
@@ -128,18 +128,18 @@ model Teacher {
 }
 
 model Course {
-  id             Int      @id @default(autoincrement())
-  name           String   @db.VarChar(255)
+  id             Int       @id @default(autoincrement())
+  name           String    @db.VarChar(255)
   description    String?
   total_sessions Int?
-  fee            Decimal? @db.Decimal(15, 2)
+  fee            Decimal?  @db.Decimal(15, 2)
   duration_weeks Int?
-  is_active      Boolean  @default(true)
-  createdAt      DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+  is_active      Boolean   @default(true)
   classes        Class[]
   feePlans       FeePlan[]
-  leads          Lead[]   @relation("LeadCourseInterested")
+  leads          Lead[]    @relation("LeadCourseInterested")
 
   @@map("courses")
 }
@@ -148,7 +148,6 @@ model Class {
   id               Int               @id @default(autoincrement())
   name             String            @db.VarChar(255)
   course_id        Int?
-  fee_plan_id      Int?
   teacher_id       Int?
   room_id          Int?
   status           ClassStatus       @default(upcoming)
@@ -159,12 +158,14 @@ model Class {
   max_students     Int?
   createdAt        DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime          @updatedAt @db.Timestamptz(6)
+  fee_plan_id      Int?
   classEnrollments ClassEnrollment[]
+  class_materials  class_materials[]
   course           Course?           @relation(fields: [course_id], references: [id])
   feePlan          FeePlan?          @relation(fields: [fee_plan_id], references: [id])
-  invoices         Invoice[]
   room             Room?             @relation(fields: [room_id], references: [id])
   teacher          Teacher?          @relation(fields: [teacher_id], references: [id])
+  invoices         Invoice[]
   payments         Payment[]
   schedules        Schedule[]
   tests            Test[]
@@ -187,8 +188,8 @@ model FeePlan {
   createdAt   DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime      @updatedAt @db.Timestamptz(6)
   classes     Class[]
-  course      Course?       @relation(fields: [course_id], references: [id])
   items       FeePlanItem[]
+  course      Course?       @relation(fields: [course_id], references: [id])
 
   @@index([course_id])
   @@index([is_active])
@@ -248,9 +249,10 @@ model Schedule {
   start_time  DateTime?      @db.Time(6)
   end_time    DateTime?      @db.Time(6)
   status      ScheduleStatus @default(scheduled)
-  notes       String?
   createdAt   DateTime       @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime       @updatedAt @db.Timestamptz(6)
+  notes       String?
+  memo        String?
   attendances Attendance[]
   class       Class?         @relation(fields: [class_id], references: [id], onDelete: Cascade)
   room        Room?          @relation(fields: [room_id], references: [id])
@@ -347,11 +349,11 @@ model Invoice {
   notes           String?
   createdAt       DateTime             @default(now()) @db.Timestamptz(6)
   updatedAt       DateTime             @updatedAt @db.Timestamptz(6)
-  class           Class?               @relation(fields: [class_id], references: [id])
   items           InvoiceItem[]
+  class           Class?               @relation(fields: [class_id], references: [id])
+  student         Student              @relation(fields: [student_id], references: [id], onDelete: Cascade)
   payments        PaymentTransaction[]
   receipts        Receipt[]
-  student         Student              @relation(fields: [student_id], references: [id], onDelete: Cascade)
 
   @@index([student_id])
   @@index([class_id])
@@ -433,18 +435,33 @@ model AIPrediction {
 }
 
 model LeadAiScore {
-  id               Int                  @id @default(autoincrement())
-  lead_id          Int                  @unique
+  id                Int                  @id @default(autoincrement())
+  lead_id           Int                  @unique
   probability_score Float
-  recommendation   LeadAiRecommendation
-  positive_factors Json?
-  negative_factors Json?
-  scored_at        DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime             @updatedAt @db.Timestamptz(6)
-  lead             Lead                 @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  recommendation    LeadAiRecommendation
+  positive_factors  Json?
+  negative_factors  Json?
+  scored_at         DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime             @updatedAt @db.Timestamptz(6)
+  lead              Lead                 @relation(fields: [lead_id], references: [id], onDelete: Cascade)
 
   @@index([probability_score(sort: Desc)])
   @@map("lead_ai_scores")
+}
+
+model class_materials {
+  id          Int      @id @default(autoincrement())
+  class_id    Int
+  title       String
+  file_name   String
+  file_url    String
+  file_type   String?
+  file_size   Int?
+  uploaded_by Int
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now())
+  classes     Class    @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  users       User     @relation(fields: [uploaded_by], references: [id])
 }
 
 enum UserRole {

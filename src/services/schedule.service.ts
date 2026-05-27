@@ -145,6 +145,21 @@ export class ScheduleService {
             },
         });
     }
+
+    async getByClass(class_id: number) {
+        return prisma.schedule.findMany({
+            where: { class_id },
+            include: {
+                room: {
+                    select: { id: true, name: true }
+                },
+                attendances: {
+                    select: { id: true, student_id: true, status: true }
+                },
+            },
+            orderBy: { date: 'asc' },
+        });
+    }
 }
 
 export const scheduleService = new ScheduleService();

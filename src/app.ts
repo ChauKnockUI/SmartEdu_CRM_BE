@@ -4,6 +4,7 @@ import { router } from './routes';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middlewares/error.middleware';
 import { requestLogger } from './middlewares/requestLogger.middleware';
+import materialRoutes from './routes/material.routes';
 
 const app = express();
 
@@ -34,6 +35,8 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api', router);
+app.use('/uploads', express.static('uploads'));
+app.use('/api', materialRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 

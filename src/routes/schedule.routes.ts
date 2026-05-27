@@ -8,7 +8,7 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/my/schedules', scheduleController.getMySchedules);
-
+router.get('/class/:classId', scheduleController.getByClass);
 router.patch(
     '/:id/attendance',
     authorize('admin', 'teacher'),
