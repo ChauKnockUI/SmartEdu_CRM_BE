@@ -144,6 +144,59 @@ export class ClassService {
         return dates;
     }
 
+    async getMyClasses(user_id: number, role: string) {
+        if (role === 'teacher') {
+            return prisma.class.findMany({
+                where: {
+                    teacher: {
+                        user_id,
+                    },
+                },
+                include: {
+                    room: true,
+                    course: true,
+                    classEnrollments: true,
+                },
+                orderBy: {
+                    id: 'desc',
+                },
+            });
+        }
+
+        if (role === 'student') {
+            return prisma.class.findMany({
+                where: {
+                    classEnrollments: {
+                        some: {
+                            student: {
+                                user_id,
+                            },
+                        },
+                    },
+                },
+                include: {
+                    room: true,
+                    course: true,
+                    classEnrollments: true,
+                },
+                orderBy: {
+                    id: 'desc',
+                },
+            });
+        }
+
+        return prisma.class.findMany({
+            include: {
+                room: true,
+                course: true,
+                classEnrollments: true,
+            },
+            orderBy: {
+                id: 'desc',
+            },
+        });
+    }
+
     async createClass(data: CreateClassInput) {
         let generatedSchedules: Prisma.ScheduleCreateManyInput[] = [];
 

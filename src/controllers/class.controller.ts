@@ -9,7 +9,7 @@ export class ClassController {
             const limit = parseInt(req.query.limit as string) || 10;
             const search = req.query.search as string;
             const status = req.query.status as ClassStatus;
-            
+
             const course_id = req.query.course_id ? parseInt(req.query.course_id as string) : undefined;
             const teacher_id = req.query.teacher_id ? parseInt(req.query.teacher_id as string) : undefined;
 
@@ -29,10 +29,40 @@ export class ClassController {
         }
     }
 
+    async getMyClasses(req: Request, res: Response) {
+        try {
+            const user_id = (req as any).user?.userId;
+            const role = (req as any).user?.role;
+
+            if (!user_id || !role) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Vui lòng đăng nhập'
+                });
+            }
+
+            const data = await classService.getMyClasses(user_id, role);
+
+            return res.status(200).json({
+                success: true,
+                data
+            });
+
+        } catch (error: any) {
+            console.error('[ClassController] getMyClasses error:', error);
+
+            return res.status(500).json({
+                success: false,
+                message: 'Internal Server Error',
+                error: error.message
+            });
+        }
+    }
+
     async getClassById(req: Request, res: Response) {
         try {
             const { id } = req.params;
-            
+
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -65,9 +95,9 @@ export class ClassController {
 
     async createClass(req: Request, res: Response) {
         try {
-            const { 
-                name, course_id, fee_plan_id, teacher_id, room_id, status, 
-                start_date, end_date, schedule_days, schedule_time, max_students 
+            const {
+                name, course_id, fee_plan_id, teacher_id, room_id, status,
+                start_date, end_date, schedule_days, schedule_time, max_students
             } = req.body;
 
             if (!name) {
@@ -114,7 +144,7 @@ export class ClassController {
             });
         } catch (error: any) {
             console.error('[ClassController] createClass error:', error);
-            
+
             // Xử lý lỗi từ Service ném ra (400 hoặc 409 Conflict)
             if (error.statusCode) {
                 return res.status(error.statusCode).json({
@@ -134,9 +164,9 @@ export class ClassController {
     async updateClass(req: Request, res: Response) {
         try {
             const { id } = req.params;
-            const { 
-                name, course_id, fee_plan_id, teacher_id, room_id, status, 
-                start_date, end_date, schedule_days, schedule_time, max_students 
+            const {
+                name, course_id, fee_plan_id, teacher_id, room_id, status,
+                start_date, end_date, schedule_days, schedule_time, max_students
             } = req.body;
 
             if (!id || isNaN(Number(id))) {
@@ -211,7 +241,7 @@ export class ClassController {
             });
         } catch (error: any) {
             console.error('[ClassController] enrollStudents error:', error);
-            
+
             if (error.statusCode) {
                 return res.status(error.statusCode).json({
                     success: false,

@@ -88,6 +88,78 @@ export class ScheduleService {
 
         return { success: true };
     }
+
+    async getMySchedules(user_id: number, role: string) {
+        if (role === 'teacher') {
+            return prisma.schedule.findMany({
+                where: {
+                    class: {
+                        teacher: {
+                            user_id,
+                        },
+                    },
+                },
+                include: {
+                    class: true,
+                    room: true,
+                    attendances: true,
+                },
+                orderBy: {
+                    date: 'asc',
+                },
+            });
+        }
+
+        if (role === 'student') {
+            return prisma.schedule.findMany({
+                where: {
+                    class: {
+                        classEnrollments: {
+                            some: {
+                                student: {
+                                    user_id,
+                                },
+                            },
+                        },
+                    },
+                },
+                include: {
+                    class: true,
+                    room: true,
+                    attendances: true,
+                },
+                orderBy: {
+                    date: 'asc',
+                },
+            });
+        }
+
+        return prisma.schedule.findMany({
+            include: {
+                class: true,
+                room: true,
+                attendances: true,
+            },
+            orderBy: {
+                date: 'asc',
+            },
+        });
+    }
+
+    async getByClass(class_id: number) {
+        return prisma.schedule.findMany({
+            where: { class_id },
+            include: {
+                room: {
+                    select: { id: true, name: true }
+                },
+                attendances: {
+                    select: { id: true, student_id: true, status: true }
+                },
+            },
+            orderBy: { date: 'asc' },
+        });
+    }
 }
 
 export const scheduleService = new ScheduleService();

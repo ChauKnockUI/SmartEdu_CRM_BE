@@ -10,6 +10,8 @@ router.use(authenticate);
 // Lấy danh sách lớp học (có phân trang, search, filter status, course, teacher)
 router.get('/', classController.getClasses);
 
+// Lấy danh sách lớp của tôi
+router.get('/my/classes', classController.getMyClasses);
 // Lấy chi tiết lớp học
 router.get('/:id', classController.getClassById);
 
