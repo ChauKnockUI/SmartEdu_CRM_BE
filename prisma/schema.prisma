@@ -26,6 +26,7 @@ model User {
   receivedPayments PaymentTransaction[] @relation("PaymentReceiver")
   createdPayments  Payment[]            @relation("PaymentCreator")
   issuedReceipts   Receipt[]            @relation("ReceiptIssuer")
+  assignmentsCreated Assignment[]        @relation("AssignmentCreator")
   student          Student?
   teacher          Teacher?
 
@@ -93,9 +94,12 @@ model Student {
   enrollment_date    DateTime?         @db.Date
   dropout_risk       Float?
   dropout_risk_level DropoutRiskLevel?
+  dropout_risk_reasons Json?
+  dropout_risk_updated_at DateTime? @db.Timestamptz(6)
   createdAt          DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
   attendances        Attendance[]
+  assignmentSubmissions AssignmentSubmission[]
   classEnrollments   ClassEnrollment[]
   invoices           Invoice[]
   payments           Payment[]
@@ -169,6 +173,7 @@ model Class {
   payments         Payment[]
   schedules        Schedule[]
   tests            Test[]
+  assignments      Assignment[]
 
   @@index([status])
   @@index([course_id])
@@ -312,6 +317,45 @@ model TestResult {
   @@unique([test_id, student_id])
   @@index([student_id])
   @@map("test_results")
+}
+
+model Assignment {
+  id          Int                    @id @default(autoincrement())
+  class_id    Int
+  title       String                 @db.VarChar(255)
+  description String?
+  due_date    DateTime?              @db.Date
+  max_score   Float?
+  created_by  Int?
+  createdAt   DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime               @updatedAt @db.Timestamptz(6)
+  class       Class                  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  creator     User?                  @relation("AssignmentCreator", fields: [created_by], references: [id])
+  submissions AssignmentSubmission[]
+
+  @@index([class_id])
+  @@index([due_date])
+  @@index([created_by])
+  @@map("assignments")
+}
+
+model AssignmentSubmission {
+  id            Int                        @id @default(autoincrement())
+  assignment_id Int
+  student_id    Int
+  submitted_at  DateTime?                  @db.Timestamptz(6)
+  score         Float?
+  status        AssignmentSubmissionStatus @default(missing)
+  feedback      String?
+  createdAt     DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime                   @updatedAt @db.Timestamptz(6)
+  assignment    Assignment                 @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
+  student       Student                    @relation(fields: [student_id], references: [id], onDelete: Cascade)
+
+  @@unique([assignment_id, student_id])
+  @@index([student_id])
+  @@index([status])
+  @@map("assignment_submissions")
 }
 
 model Payment {
@@ -544,6 +588,13 @@ enum TestType {
   midterm
   final
   assignment
+}
+
+enum AssignmentSubmissionStatus {
+  submitted
+  missing
+  late
+  excused
 }
 
 enum PaymentMethod {

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { studentService } from '../services/student.service';
+import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { StudentStatus } from '../generated/prisma';
 
 export class StudentController {
@@ -184,6 +185,38 @@ export class StudentController {
                 success: false,
                 message: 'Internal Server Error',
                 error: error.message
+            });
+        }
+    }
+
+    async scoreDropoutRisk(req: Request, res: Response) {
+        try {
+            const studentId = Number(req.params.id);
+            const classId = req.query.class_id ? Number(req.query.class_id) : NaN;
+
+            if (!studentId || isNaN(studentId) || !classId || isNaN(classId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'student id va class_id la bat buoc'
+                });
+            }
+
+            const result = await dropoutRiskService.scoreStudent(studentId, classId);
+
+            if (!result.success) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'AI dropout service chua san sang',
+                    features: result.features
+                });
+            }
+
+            return res.status(200).json(result);
+        } catch (error: any) {
+            console.error('[StudentController] scoreDropoutRisk error:', error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message
             });
         }
     }

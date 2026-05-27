@@ -10,6 +10,7 @@ import scheduleRouter from './schedule.routes';
 import attendanceRouter from './attendance.routes';
 import invoiceRouter from './invoice.routes';
 import financeRouter from './finance.routes';
+import assignmentRouter from './assignment.routes';
 
 const router = Router();
 
@@ -47,5 +48,6 @@ router.use('/attendance', attendanceRouter);
 
 router.use('/invoices', invoiceRouter);
 router.use('/finance', financeRouter);
+router.use('/assignments', assignmentRouter);
 
 export { router };
