@@ -167,14 +167,11 @@ export class LeadController {
                 });
             }
 
-            // Lấy user_id từ header giả lập (tương tự deleteLead) — sẽ thay bằng Auth Middleware sau
-            const userId = req.header('x-user-id');
-
             const activity = await leadService.createLeadActivity(Number(id), {
                 type: type as LeadActivityType,
                 content,
                 engagement_status,
-                user_id: userId ? parseInt(userId, 10) : undefined,
+                user_id: req.user?.userId,
             });
 
             if (!activity) {
