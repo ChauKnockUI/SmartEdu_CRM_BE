@@ -12,6 +12,18 @@ const startServer = async () => {
       console.log(`Environment: ${env.NODE_ENV}`);
     });
 
+    server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(
+          `Port ${env.PORT} is already in use. Stop the existing process or set PORT to another value in .env.`
+        );
+        process.exit(1);
+      }
+
+      console.error('Server error:', error);
+      process.exit(1);
+    });
+
     const shutdown = async (signal: string) => {
       console.log(`\n${signal} received. Shutting down gracefully...`);
       server.close(async () => {

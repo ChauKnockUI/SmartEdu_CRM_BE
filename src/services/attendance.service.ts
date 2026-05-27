@@ -1,6 +1,7 @@
 import { AttendanceStatus } from '../generated/prisma';
 import { attendanceRepository } from '../repositories/attendance.repository';
 import { prisma } from '../database/db';
+import { dropoutRiskService } from './ai/dropoutRisk.service';
 
 export interface AttendanceInput {
   student_id: number;
@@ -96,6 +97,17 @@ export class AttendanceService {
         });
       }
     });
+
+    if (schedule.class_id && attendances.length > 0) {
+      const affectedStudentIds = Array.from(new Set(attendances.map((att) => att.student_id)));
+      void Promise.allSettled(
+        affectedStudentIds.map((studentId) =>
+          dropoutRiskService.scoreStudent(studentId, schedule.class_id as number)
+        )
+      ).catch((error) => {
+        console.error('[AttendanceService] dropout risk scoring error:', error);
+      });
+    }
 
     return { success: true };
   }

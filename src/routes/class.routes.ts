@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { classController } from '../controllers/class.controller';
+import { assignmentController } from '../controllers/assignment.controller';
 import { authenticate, authorize } from '../middlewares/auth.middleware';
 
 const router = Router();
@@ -14,6 +15,9 @@ router.get('/', classController.getClasses);
 router.get('/my/classes', classController.getMyClasses);
 // Lấy chi tiết lớp học
 router.get('/:id', classController.getClassById);
+
+router.get('/:classId/assignments', authorize('admin', 'teacher'), assignmentController.getClassAssignments);
+router.post('/:classId/assignments', authorize('admin', 'teacher'), assignmentController.createAssignment);
 
 // ─── Các API sửa đổi dữ liệu cần Role Admin ────────────────────────────────
 
