@@ -59,7 +59,8 @@ export class LeadRepository {
                         probability_score: true,
                         recommendation: true,
                         positive_factors: true,
-                        negative_factors: true
+                        negative_factors: true,
+                        scored_at: true
                     }
                 }
             }

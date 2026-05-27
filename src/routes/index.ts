@@ -12,6 +12,7 @@ import invoiceRouter from './invoice.routes';
 import financeRouter from './finance.routes';
 import assignmentRouter from './assignment.routes';
 import dashboardRouter from './dashboard.routes';
+import userRouter from './user.routes';
 
 const router = Router();
 
@@ -23,6 +24,7 @@ router.get('/', (_req, res) => {
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 router.use('/auth', authRouter);
 router.use('/dashboard', dashboardRouter);
+router.use('/users', userRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);

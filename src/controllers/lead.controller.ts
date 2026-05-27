@@ -203,7 +203,10 @@ export class LeadController {
      */
     async createLead(req: Request, res: Response) {
         try {
-            const { full_name, phone, email, source, occupation, study_purpose } = req.body;
+            const { full_name, phone, email, source, occupation, study_purpose, course_id } = req.body;
+            const allowedSources = ['facebook', 'google_ads', 'website_organic', 'tiktok', 'referral', 'other'];
+            const allowedOccupations = ['student_y1_y2', 'student_y3_y4', 'working_professional'];
+            const allowedStudyPurposes = ['study_abroad', 'pass_exam', 'career_advancement'];
 
             // Basic Validation
             if (!full_name || typeof full_name !== 'string' || full_name.trim() === '') {
@@ -213,13 +216,45 @@ export class LeadController {
                 });
             }
 
+            if (!phone || typeof phone !== 'string' || phone.trim() === '') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Validation Error: phone là bắt buộc.'
+                });
+            }
+            if (!source || !allowedSources.includes(source)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Validation Error: source phải thuộc [${allowedSources.join(', ')}].`
+                });
+            }
+            if (!occupation || !allowedOccupations.includes(occupation)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Validation Error: occupation phải thuộc [${allowedOccupations.join(', ')}].`
+                });
+            }
+            if (!study_purpose || !allowedStudyPurposes.includes(study_purpose)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Validation Error: study_purpose phải thuộc [${allowedStudyPurposes.join(', ')}].`
+                });
+            }
+            if (!course_id || isNaN(Number(course_id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Validation Error: course_id là bắt buộc và phải là số.'
+                });
+            }
+
             const newLead = await leadService.createLead({
                 full_name: full_name.trim(),
-                phone,
+                phone: phone.trim(),
                 email,
                 source,
                 occupation,
-                study_purpose
+                study_purpose,
+                course_id: course_id ? Number(course_id) : undefined
             });
 
             // Status 201: Created

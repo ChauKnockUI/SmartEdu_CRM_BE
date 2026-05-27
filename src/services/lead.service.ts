@@ -23,6 +23,7 @@ export interface CreateLeadInput {
     source?: string;
     occupation?: string;
     study_purpose?: string;
+    course_id?: number;
 }
 
 export interface UpdateLeadInput {
@@ -245,6 +246,7 @@ export class LeadService {
             lead_source: data.source,
             occupation: data.occupation,
             study_purpose: data.study_purpose,
+            course_id: data.course_id,
         });
 
         // Trigger AI Điểm Tự Động (Fire and forget - không dùng await chặn request)
