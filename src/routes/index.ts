@@ -11,6 +11,7 @@ import attendanceRouter from './attendance.routes';
 import invoiceRouter from './invoice.routes';
 import financeRouter from './finance.routes';
 import assignmentRouter from './assignment.routes';
+import dashboardRouter from './dashboard.routes';
 
 const router = Router();
 
@@ -21,6 +22,7 @@ router.get('/', (_req, res) => {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 router.use('/auth', authRouter);
+router.use('/dashboard', dashboardRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);
