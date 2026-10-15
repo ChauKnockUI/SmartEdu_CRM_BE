@@ -288,7 +288,7 @@ export class LeadController {
             }
 
             // Chỉ destructure những field được phép update theo y/c
-            const { status, assigned_to, notes, occupation, study_purpose, source, course_id } = req.body;
+            const { status, assigned_to, notes, occupation, study_purpose, source, course_id, lost_reason } = req.body;
 
             const updatedLead = await leadService.updateLead(Number(id), {
                 status,
@@ -297,8 +297,9 @@ export class LeadController {
                 occupation,
                 study_purpose,
                 source,
-                course_id
-            });
+                course_id,
+                lost_reason
+            }, req.user?.userId);
 
             if (!updatedLead) {
                 return res.status(404).json({
@@ -316,6 +317,34 @@ export class LeadController {
             return res.status(500).json({
                 success: false,
                 message: 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
+                error: error.message
+            });
+        }
+    }
+
+    /**
+     * Báo cáo Phễu bán hàng | GET /api/leads/funnel
+     */
+    async getLeadFunnel(req: Request, res: Response) {
+        try {
+            const { assigned_to, source, course_id, date_from, date_to } = req.query;
+            const funnel = await leadService.getLeadFunnel({
+                assigned_to: assigned_to ? parseInt(assigned_to as string, 10) : undefined,
+                source: source as string,
+                course_id: course_id ? parseInt(course_id as string, 10) : undefined,
+                date_from: date_from as string,
+                date_to: date_to as string,
+            });
+
+            return res.status(200).json({
+                success: true,
+                data: funnel
+            });
+        } catch (error: any) {
+            console.error('[LeadController] getLeadFunnel error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Lỗi khi lấy báo cáo phễu bán hàng',
                 error: error.message
             });
         }

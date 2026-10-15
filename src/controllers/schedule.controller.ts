@@ -114,6 +114,33 @@ export class ScheduleController {
             });
         }
     }
+
+    async getAllSchedules(req: Request, res: Response) {
+        try {
+            const { start_date, end_date, class_id, teacher_id, room_id, status } = req.query;
+
+            const schedules = await scheduleService.getAllSchedules({
+                startDate: start_date ? new Date(start_date as string) : undefined,
+                endDate: end_date ? new Date(end_date as string) : undefined,
+                classId: class_id ? Number(class_id) : undefined,
+                teacherId: teacher_id ? Number(teacher_id) : undefined,
+                roomId: room_id ? Number(room_id) : undefined,
+                status: status as any,
+            });
+
+            return res.status(200).json({
+                success: true,
+                data: schedules
+            });
+        } catch (error: any) {
+            console.error('[ScheduleController] getAllSchedules error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Internal Server Error',
+                error: error.message
+            });
+        }
+    }
 }
 
 export const scheduleController = new ScheduleController();

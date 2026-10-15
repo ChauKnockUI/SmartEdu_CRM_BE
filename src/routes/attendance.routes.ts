@@ -27,6 +27,26 @@ router.patch(
   attendanceController.markAttendance
 );
 
+// PATCH /attendance/sessions/:id/unlock - Admin mở khóa điểm danh
+router.patch(
+  '/sessions/:id/unlock',
+  authorize('admin'),
+  attendanceController.toggleUnlockAttendance
+);
+// POST /attendance/sessions/:id/request-unlock - Giáo viên gửi yêu cầu mở khóa điểm danh
+router.post(
+  '/sessions/:id/request-unlock',
+  authorize('teacher'),
+  attendanceController.requestUnlockAttendance
+);
+
+// Giáo viên gửi yêu cầu mở khóa điểm danh
+router.post(
+  '/sessions/:id/request-unlock',
+  authorize('teacher'),
+  attendanceController.requestUnlockAttendance
+);
+
 // GET /attendance/students/:studentId/classes/:classId/history - Xem lịch sử điểm danh
 // Người dùng: Admin, Giáo viên, Học viên (chỉ xem của chính mình)
 router.get(

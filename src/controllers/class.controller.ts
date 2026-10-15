@@ -13,8 +13,9 @@ export class ClassController {
 
             const course_id = req.query.course_id ? parseInt(req.query.course_id as string) : undefined;
             const teacher_id = req.query.teacher_id ? parseInt(req.query.teacher_id as string) : undefined;
+            const unassigned_teacher = req.query.unassigned_teacher === 'true';
 
-            const result = await classService.getClasses({ page, limit, search, status, course_id, teacher_id });
+            const result = await classService.getClasses({ page, limit, search, status, course_id, teacher_id, unassigned_teacher });
 
             return res.status(200).json({
                 success: true,
@@ -282,6 +283,39 @@ export class ClassController {
             return res.status(error.statusCode || 500).json({
                 success: false,
                 message: error.message || 'Không tính được dropout risk cho lớp'
+            });
+        }
+    }
+
+    async unenrollStudent(req: Request, res: Response) {
+        try {
+            const class_id = parseInt(req.params.id);
+            const student_id = parseInt(req.params.studentId);
+
+            if (isNaN(class_id) || isNaN(student_id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID lớp học hoặc ID học viên không hợp lệ'
+                });
+            }
+
+            const result = await classService.unenrollStudent(class_id, student_id);
+
+            return res.status(200).json({
+                success: true,
+                message: result.message
+            });
+        } catch (error: any) {
+            console.error('[ClassController] unenrollStudent error:', error);
+            if (error.statusCode) {
+                return res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message
+                });
+            }
+            return res.status(500).json({
+                success: false,
+                message: error.message || 'Lỗi server'
             });
         }
     }

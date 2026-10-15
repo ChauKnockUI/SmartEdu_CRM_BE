@@ -22,6 +22,13 @@ export class LeadRepository {
             take,
             orderBy,
             include: {
+                course: {
+                    select: {
+                        id: true,
+                        name: true,
+                        fee: true,
+                    }
+                },
                 assignedUser: {
                     select: {
                         id: true,
@@ -214,6 +221,41 @@ export class LeadRepository {
             }
 
             return newStudent;
+        });
+    }
+
+    async getFunnelData(where: Prisma.LeadWhereInput) {
+        return await prisma.lead.findMany({
+            where,
+            select: {
+                id: true,
+                status: true,
+                lead_source: true,
+                notes: true,
+                last_contacted: true,
+                createdAt: true,
+                updatedAt: true,
+                course_id: true,
+                course: {
+                    select: {
+                        id: true,
+                        name: true,
+                        fee: true,
+                    }
+                },
+                aiScore: {
+                    select: {
+                        probability_score: true,
+                        recommendation: true,
+                    }
+                },
+                assignedUser: {
+                    select: {
+                        id: true,
+                        full_name: true,
+                    }
+                }
+            }
         });
     }
 

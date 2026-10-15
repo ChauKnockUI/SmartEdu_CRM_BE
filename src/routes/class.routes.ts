@@ -31,4 +31,7 @@ router.put('/:id', authorize('admin'), classController.updateClass);
 // Ghi danh học viên vào lớp (Academic Enrollment)
 router.post('/:id/enroll', authorize('admin', 'sale'), classController.enrollStudent);
 
+// Hủy ghi danh học viên khỏi lớp
+router.delete('/:id/enroll/:studentId', authorize('admin'), classController.unenrollStudent);
+
 export default router;
