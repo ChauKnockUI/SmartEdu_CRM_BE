@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
 import { generateToken } from '../utils/jwt.util';
 import { RegisterInput, LoginInput } from '../schemas/auth.schema';
 
@@ -22,7 +22,7 @@ export const register = async (
 
     // 1. Kiểm tra email đã tồn tại chưa
     const existingUser = await prisma.user.findUnique({
-      where: { email },
+      where: { tenant_id_email: { tenant_id: req.tenant!.id, email } },
     });
 
     if (existingUser) {
@@ -41,7 +41,7 @@ export const register = async (
     const isActive = assignedRole === 'student';
 
     // 3. Tạo user trong database
-    const user = await prisma.$transaction(async (tx) => {
+    const user = await withTenantTx(async (tx) => {
       const newUser = await tx.user.create({
         data: {
           email,
@@ -96,6 +96,8 @@ export const register = async (
       userId: user.id,
       email: user.email,
       role: user.role,
+      tenantId: req.tenant!.id,
+      scope: 'tenant',
     });
 
     res.status(201).json({
@@ -132,7 +134,7 @@ export const login = async (
 
     // 1. Tìm user theo email
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { tenant_id_email: { tenant_id: req.tenant!.id, email } },
     });
 
     if (!user) {
@@ -168,6 +170,8 @@ export const login = async (
       userId: user.id,
       email: user.email,
       role: user.role,
+      tenantId: req.tenant!.id,
+      scope: 'tenant',
     });
 
     // 5. Trả về response (không bao gồm password_hash)

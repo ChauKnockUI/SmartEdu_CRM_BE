@@ -1,5 +1,17 @@
+import { randomInt } from 'crypto';
 import { Prisma, LeadStatus, UserRole } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
+import { currentTenantId } from '../database/tenant-context';
+
+export interface FunnelAggregateRow {
+    status: string;
+    source: string | null;
+    count: number;
+    feeSum: number;
+    weightedSum: number;
+    scoreSum: number;
+    staleCount: number;
+}
 
 export class LeadRepository {
     private buildInvoiceNo() {
@@ -7,7 +19,7 @@ export class LeadRepository {
         const yyyy = now.getFullYear();
         const mm = String(now.getMonth() + 1).padStart(2, '0');
         const dd = String(now.getDate()).padStart(2, '0');
-        const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+        const random = randomInt(0, 100_000_000).toString().padStart(8, '0');
         return `INV-${yyyy}${mm}${dd}-${random}`;
     }
 
@@ -157,7 +169,7 @@ export class LeadRepository {
         course_id?: number | null;
         course?: { id: number; name: string; fee: Prisma.Decimal | null } | null;
     }) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             // BƯỚC 1: Tạo User account với role student
             const newUser = await tx.user.create({
                 data: {
@@ -224,39 +236,64 @@ export class LeadRepository {
         });
     }
 
-    async getFunnelData(where: Prisma.LeadWhereInput) {
-        return await prisma.lead.findMany({
-            where,
-            select: {
-                id: true,
-                status: true,
-                lead_source: true,
-                notes: true,
-                last_contacted: true,
-                createdAt: true,
-                updatedAt: true,
-                course_id: true,
-                course: {
-                    select: {
-                        id: true,
-                        name: true,
-                        fee: true,
-                    }
-                },
-                aiScore: {
-                    select: {
-                        probability_score: true,
-                        recommendation: true,
-                    }
-                },
-                assignedUser: {
-                    select: {
-                        id: true,
-                        full_name: true,
-                    }
-                }
-            }
-        });
+    /**
+     * Gom phễu bán hàng ngay trong DB: mỗi dòng = một cặp (status, nguồn).
+     * Thay cho việc tải toàn bộ lead của tenant vào Node.
+     */
+    async getFunnelAggregates(filters: {
+        assigned_to?: number;
+        source?: string;
+        course_id?: number;
+        date_from?: Date;
+        date_to?: Date;
+        staleBefore: Date;
+    }): Promise<FunnelAggregateRow[]> {
+        const tenantId = currentTenantId();
+        const conds: Prisma.Sql[] = [Prisma.sql`l.tenant_id = ${tenantId}`];
+        if (filters.assigned_to) conds.push(Prisma.sql`l.assigned_to = ${filters.assigned_to}`);
+        if (filters.source) conds.push(Prisma.sql`l.lead_source = ${filters.source}`);
+        if (filters.course_id) conds.push(Prisma.sql`l.course_id = ${filters.course_id}`);
+        if (filters.date_from) conds.push(Prisma.sql`l."createdAt" >= ${filters.date_from}`);
+        if (filters.date_to) conds.push(Prisma.sql`l."createdAt" <= ${filters.date_to}`);
+
+        // Quy đổi điểm AI: giá trị > 1 là phần trăm, <= 1 là xác suất (giữ nguyên quy ước cũ)
+        const rows = await withTenantTx((tx) =>
+            tx.$queryRaw<
+                {
+                    status: string;
+                    source: string | null;
+                    cnt: bigint;
+                    fee_sum: Prisma.Decimal | null;
+                    weighted_sum: number | null;
+                    score_sum: number | null;
+                    stale_cnt: bigint;
+                }[]
+            >(Prisma.sql`
+                SELECT l.status::text AS status,
+                       l.lead_source AS source,
+                       count(*) AS cnt,
+                       COALESCE(sum(c.fee), 0) AS fee_sum,
+                       COALESCE(sum(COALESCE(c.fee, 0)::float8 * (CASE WHEN COALESCE(a.probability_score, 0) > 1 THEN a.probability_score / 100 ELSE COALESCE(a.probability_score, 0) END)), 0) AS weighted_sum,
+                       COALESCE(sum(CASE WHEN COALESCE(a.probability_score, 0) <= 1 THEN COALESCE(a.probability_score, 0) * 100 ELSE a.probability_score END), 0) AS score_sum,
+                       count(*) FILTER (WHERE l.status IN ('new', 'contacted', 'interested', 'trial')
+                                          AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore})) AS stale_cnt
+                FROM leads l
+                LEFT JOIN courses c ON c.id = l.course_id
+                LEFT JOIN lead_ai_scores a ON a.lead_id = l.id
+                WHERE ${Prisma.join(conds, ' AND ')}
+                GROUP BY l.status, l.lead_source
+            `)
+        );
+
+        return rows.map((r) => ({
+            status: r.status,
+            source: r.source,
+            count: Number(r.cnt),
+            feeSum: Number(r.fee_sum ?? 0),
+            weightedSum: Number(r.weighted_sum ?? 0),
+            scoreSum: Number(r.score_sum ?? 0),
+            staleCount: Number(r.stale_cnt),
+        }));
     }
 
     async checkExistence(id: number) {

@@ -1,5 +1,5 @@
 import { Prisma } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
 
 export class ClassRepository {
     async findMany(params: {
@@ -66,7 +66,7 @@ export class ClassRepository {
         classData: Prisma.ClassUncheckedCreateInput,
         schedulesData: Prisma.ScheduleCreateManyInput[]
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             // 1. Create Class
             const newClass = await tx.class.create({
                 data: classData
@@ -101,7 +101,7 @@ export class ClassRepository {
         classData: Prisma.ClassUncheckedUpdateInput,
         scheduleData: Prisma.ScheduleUncheckedUpdateManyInput
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             const updatedClass = await tx.class.update({
                 where: { id },
                 data: classData

@@ -6,6 +6,8 @@ export interface JwtPayload {
   userId: number;
   email: string;
   role: UserRole;
+  tenantId: number;
+  scope: 'tenant' | 'platform';
 }
 
 export const generateToken = (payload: JwtPayload): string => {
