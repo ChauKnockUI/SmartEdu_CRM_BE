@@ -1,5 +1,5 @@
 import { AttendanceStatus, Prisma, ScheduleStatus } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
 
 export interface AttendanceInput {
@@ -73,7 +73,7 @@ export class ScheduleService {
         }
 
         // 4. Bulk Upsert logic using Prisma Transaction
-        await prisma.$transaction(async (tx) => {
+        await withTenantTx(async (tx) => {
             for (const att of attendances) {
                 await tx.attendance.upsert({
                     where: {

@@ -1,5 +1,6 @@
 import { Prisma } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
+import { currentTenantId } from '../database/tenant-context';
 
 export class TeacherRepository {
     async count(where?: Prisma.TeacherWhereInput) {
@@ -67,14 +68,14 @@ export class TeacherRepository {
 
     async findUserByEmail(email: string) {
         return await prisma.user.findUnique({
-            where: { email },
+            where: { tenant_id_email: { tenant_id: currentTenantId(), email } },
             select: { id: true, email: true }
         });
     }
 
     async findTeacherByEmail(email: string) {
         return await prisma.teacher.findUnique({
-            where: { email },
+            where: { tenant_id_email: { tenant_id: currentTenantId(), email } },
             select: { id: true, user_id: true, email: true }
         });
     }
@@ -83,7 +84,7 @@ export class TeacherRepository {
         userData: Prisma.UserCreateInput,
         teacherData: Omit<Prisma.TeacherUncheckedCreateInput, 'user_id'>
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             const newUser = await tx.user.create({ data: userData });
 
             const newTeacher = await tx.teacher.create({
@@ -113,7 +114,7 @@ export class TeacherRepository {
         teacherData: Prisma.TeacherUncheckedUpdateInput,
         userData?: Prisma.UserUncheckedUpdateInput
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             const updatedTeacher = await tx.teacher.update({
                 where: { id: teacherId },
                 data: teacherData,
@@ -141,7 +142,7 @@ export class TeacherRepository {
     }
 
     async softDelete(id: number, userId: number | null) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             const teacher = await tx.teacher.update({
                 where: { id },
                 data: { is_active: false }

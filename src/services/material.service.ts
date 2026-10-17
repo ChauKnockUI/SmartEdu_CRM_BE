@@ -1,14 +1,52 @@
 import { prisma } from '../database/db';
-import { supabase, SUPABASE_STORAGE_BUCKET } from '../config/supabase';
+import { getSupabase, SUPABASE_STORAGE_BUCKET } from '../config/supabase';
+import { currentTenantId } from '../database/tenant-context';
 
-const getStoragePathFromUrl = (fileUrl: string) => {
+const SIGNED_URL_TTL_SECONDS = 3600;
+
+// Chỉ nhận các loại tài liệu học tập; MIME do client khai báo nên kiểm tra thêm đuôi file.
+const ALLOWED_TYPES: Record<string, string[]> = {
+    'application/pdf': ['pdf'],
+    'application/msword': ['doc'],
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['docx'],
+    'application/vnd.ms-excel': ['xls'],
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['xlsx'],
+    'application/vnd.ms-powerpoint': ['ppt'],
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['pptx'],
+    'text/plain': ['txt'],
+    'image/png': ['png'],
+    'image/jpeg': ['jpg', 'jpeg'],
+    'application/zip': ['zip'],
+    'audio/mpeg': ['mp3'],
+    'video/mp4': ['mp4'],
+};
+
+const httpError = (statusCode: number, message: string) => {
+    const err = new Error(message);
+    (err as any).statusCode = statusCode;
+    return err;
+};
+
+const validateFile = (file: { originalname: string; mimetype: string }) => {
+    const ext = (file.originalname.split('.').pop() || '').toLowerCase();
+    const allowedExt = ALLOWED_TYPES[file.mimetype];
+    if (!allowedExt || !allowedExt.includes(ext)) {
+        throw httpError(400, 'Định dạng file không được hỗ trợ');
+    }
+    return ext;
+};
+
+const buildStoragePath = (classId: number, ext: string) =>
+    `tenant-${currentTenantId()}/class-${classId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+/** file_url có thể là đường dẫn storage (mới) hoặc URL public cũ (trước khi chuyển bucket private). */
+const getStoragePath = (fileUrl: string): string | null => {
+    if (!/^https?:\/\//.test(fileUrl)) return fileUrl;
     try {
         const url = new URL(fileUrl);
         const marker = `/storage/v1/object/public/${SUPABASE_STORAGE_BUCKET}/`;
         const index = url.pathname.indexOf(marker);
-
         if (index === -1) return null;
-
         return decodeURIComponent(url.pathname.slice(index + marker.length));
     } catch {
         return null;
@@ -69,7 +107,7 @@ export class MaterialService {
     async getByClass(classId: number, userId: number, role: string) {
         await this.checkClassAccess(classId, userId, role);
 
-        return prisma.class_materials.findMany({
+        const items = await prisma.class_materials.findMany({
             where: {
                 class_id: classId,
             },
@@ -86,6 +124,19 @@ export class MaterialService {
                 created_at: 'desc',
             },
         });
+
+        // Bucket private: trả URL ký ngắn hạn thay cho URL cố định
+        const paths = items.map((m) => getStoragePath(m.file_url));
+        const valid = paths.filter((p): p is string => !!p);
+        const signed = valid.length
+            ? await getSupabase().storage.from(SUPABASE_STORAGE_BUCKET).createSignedUrls(valid, SIGNED_URL_TTL_SECONDS)
+            : { data: [] as { path: string | null; signedUrl: string }[] };
+        const urlByPath = new Map(signed.data?.map((d) => [d.path, d.signedUrl]) ?? []);
+
+        return items.map((m, i) => ({
+            ...m,
+            file_url: (paths[i] && urlByPath.get(paths[i])) || null,
+        }));
     }
 
     async upload(params: {
@@ -105,16 +156,9 @@ export class MaterialService {
 
         await this.checkClassAccess(classId, userId, role);
 
-        const ext = file.originalname.split('.').pop() || 'file';
-
-        const safeFileName =
-            Date.now() +
-            '-' +
-            Math.random().toString(36).slice(2) +
-            '.' +
-            ext;
-
-        const storagePath = `class-${classId}/${safeFileName}`;
+        const ext = validateFile(file);
+        const storagePath = buildStoragePath(classId, ext);
+        const supabase = getSupabase();
 
         const { error } = await supabase.storage
             .from(SUPABASE_STORAGE_BUCKET)
@@ -124,28 +168,27 @@ export class MaterialService {
             });
 
         if (error) {
-            const err = new Error(error.message);
-            (err as any).statusCode = 500;
-            throw err;
+            console.error('[Material] upload error:', error.message);
+            throw httpError(500, 'Không thể tải file lên');
         }
 
-        const { data } = supabase.storage
-            .from(SUPABASE_STORAGE_BUCKET)
-            .getPublicUrl(storagePath);
-
-        return prisma.class_materials.create({
-            data: {
-                class_id: classId,
-                title,
-                file_name: file.originalname,
-                file_url: data.publicUrl,
-                file_type: file.mimetype,
-                file_size: file.size,
-                uploaded_by: userId,
-            },
-        });
+        try {
+            return await prisma.class_materials.create({
+                data: {
+                    class_id: classId,
+                    title,
+                    file_name: file.originalname,
+                    file_url: storagePath,
+                    file_type: file.mimetype,
+                    file_size: file.size,
+                    uploaded_by: userId,
+                },
+            });
+        } catch (e) {
+            await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([storagePath]);
+            throw e;
+        }
     }
-
     async update(
         id: number,
         userId: number,
@@ -178,19 +221,13 @@ export class MaterialService {
             throw err;
         }
 
+        const supabase = getSupabase();
         let fileData = {};
+        let newStoragePath: string | null = null;
 
         if (data.file) {
-            const ext = data.file.originalname.split('.').pop() || 'file';
-
-            const safeFileName =
-                Date.now() +
-                '-' +
-                Math.random().toString(36).slice(2) +
-                '.' +
-                ext;
-
-            const newStoragePath = `class-${material.class_id}/${safeFileName}`;
+            const ext = validateFile(data.file);
+            newStoragePath = buildStoragePath(material.class_id, ext);
 
             const { error } = await supabase.storage
                 .from(SUPABASE_STORAGE_BUCKET)
@@ -200,36 +237,41 @@ export class MaterialService {
                 });
 
             if (error) {
-                const err = new Error(error.message);
-                (err as any).statusCode = 500;
-                throw err;
+                console.error('[Material] upload error:', error.message);
+                throw httpError(500, 'Không thể tải file lên');
             }
-
-            const oldStoragePath = getStoragePathFromUrl(material.file_url);
-
-            if (oldStoragePath) {
-                await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([oldStoragePath]);
-            }
-
-            const { data: publicData } = supabase.storage
-                .from(SUPABASE_STORAGE_BUCKET)
-                .getPublicUrl(newStoragePath);
 
             fileData = {
                 file_name: data.file.originalname,
-                file_url: publicData.publicUrl,
+                file_url: newStoragePath,
                 file_type: data.file.mimetype,
                 file_size: data.file.size,
             };
         }
 
-        return prisma.class_materials.update({
-            where: { id },
-            data: {
-                title: data.title || material.title,
-                ...fileData,
-            },
-        });
+        // Ghi DB trước; chỉ xóa file cũ sau khi DB đã cập nhật để không mất file khi DB lỗi
+        let updated;
+        try {
+            updated = await prisma.class_materials.update({
+                where: { id },
+                data: {
+                    title: data.title || material.title,
+                    ...fileData,
+                },
+            });
+        } catch (e) {
+            if (newStoragePath) await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([newStoragePath]);
+            throw e;
+        }
+
+        if (newStoragePath) {
+            const oldStoragePath = getStoragePath(material.file_url);
+            if (oldStoragePath) {
+                await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([oldStoragePath]);
+            }
+        }
+
+        return updated;
     }
 
     async remove(id: number, userId: number, role: string) {
@@ -256,15 +298,16 @@ export class MaterialService {
             throw err;
         }
 
-        const storagePath = getStoragePathFromUrl(material.file_url);
-
-        if (storagePath) {
-            await supabase.storage.from(SUPABASE_STORAGE_BUCKET).remove([storagePath]);
-        }
-
-        return prisma.class_materials.delete({
+        const deleted = await prisma.class_materials.delete({
             where: { id },
         });
+
+        const storagePath = getStoragePath(material.file_url);
+        if (storagePath) {
+            await getSupabase().storage.from(SUPABASE_STORAGE_BUCKET).remove([storagePath]);
+        }
+
+        return deleted;
     }
 }
 

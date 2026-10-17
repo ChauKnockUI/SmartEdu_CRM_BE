@@ -1,5 +1,6 @@
 import { Prisma } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
+import { currentTenantId } from '../database/tenant-context';
 
 export class StudentRepository {
     async findMany(params: {
@@ -67,7 +68,7 @@ export class StudentRepository {
 
     async findByEmail(email: string) {
         return await prisma.user.findUnique({
-            where: { email }
+            where: { tenant_id_email: { tenant_id: currentTenantId(), email } }
         });
     }
 
@@ -75,7 +76,7 @@ export class StudentRepository {
         userData: Prisma.UserCreateInput,
         studentData: Omit<Prisma.StudentUncheckedCreateInput, 'user_id'>
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             // 1. Create User account for student
             const newUser = await tx.user.create({
                 data: userData
@@ -108,7 +109,7 @@ export class StudentRepository {
         studentData: Prisma.StudentUncheckedUpdateInput,
         userData?: Prisma.UserUncheckedUpdateInput
     ) {
-        return await prisma.$transaction(async (tx) => {
+        return await withTenantTx(async (tx) => {
             const updatedStudent = await tx.student.update({
                 where: { id: studentId },
                 data: studentData

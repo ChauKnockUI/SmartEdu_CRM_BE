@@ -1,6 +1,6 @@
 import { AttendanceStatus } from '../generated/prisma';
 import { attendanceRepository } from '../repositories/attendance.repository';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
 
 export interface AttendanceInput {
@@ -75,7 +75,7 @@ export class AttendanceService {
       throw err;
     }
 
-    await prisma.$transaction(async (tx) => {
+    await withTenantTx(async (tx) => {
       await tx.schedule.update({
         where: { id: schedule_id },
         data: {

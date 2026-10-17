@@ -32,6 +32,25 @@ export const authenticate = (
 
     const token = authHeader.split(' ')[1];
     const decoded = verifyToken(token);
+
+    // Token cũ (chưa có tenantId) hoặc token nền tảng: bắt đăng nhập lại
+    if (decoded.scope !== 'tenant' || typeof decoded.tenantId !== 'number') {
+      res.status(401).json({
+        status: 'error',
+        message: 'Phiên đăng nhập không hợp lệ, vui lòng đăng nhập lại',
+      });
+      return;
+    }
+
+    // Token của tenant khác với tenant suy ra từ Host
+    if (!req.tenant || decoded.tenantId !== req.tenant.id) {
+      res.status(403).json({
+        status: 'error',
+        message: 'Token không thuộc trung tâm này',
+      });
+      return;
+    }
+
     req.user = decoded;
     next();
   } catch (error) {

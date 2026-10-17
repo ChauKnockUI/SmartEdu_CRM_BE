@@ -1,5 +1,6 @@
 import { InvoiceStatus, PaymentMethod, Prisma } from '../generated/prisma';
-import { prisma } from '../database/db';
+import { randomInt } from 'crypto';
+import { prisma, withTenantTx } from '../database/db';
 
 const toNumber = (value: Prisma.Decimal | number | null | undefined) => {
   if (value === null || value === undefined) return 0;
@@ -15,7 +16,8 @@ const httpError = (message: string, statusCode: number) => {
 const code = (prefix: string) => {
   const now = new Date();
   const ymd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
-  const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+  // 8 chữ số ngẫu nhiên mật mã học: xác suất trùng trong 1 ngày/1 tenant là không đáng kể (unique theo tenant ở DB)
+  const random = randomInt(0, 100_000_000).toString().padStart(8, '0');
   return `${prefix}-${ymd}-${random}`;
 };
 
@@ -256,7 +258,7 @@ export class InvoiceService {
   }) {
     if (data.amount <= 0) throw httpError('Payment amount must be greater than 0', 400);
 
-    return prisma.$transaction(async (tx) => {
+    return withTenantTx(async (tx) => {
       const invoice = await tx.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
       if (!invoice) throw httpError('Invoice not found', 404);
 

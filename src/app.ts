@@ -4,12 +4,25 @@ import { router } from './routes';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middlewares/error.middleware';
 import { requestLogger } from './middlewares/requestLogger.middleware';
+import { resolveTenant } from './middlewares/tenant.middleware';
+import platformRoutes from './routes/platform.routes';
 import materialRoutes from './routes/material.routes';
 
 const app = express();
 
+// Cho phép FRONTEND_URL và mọi subdomain của BASE_DOMAIN (kiểm tra bằng hàm, không dùng '*')
+const isAllowedOrigin = (origin: string): boolean => {
+  if (origin === env.FRONTEND_URL) return true;
+  try {
+    const { hostname } = new URL(origin);
+    return hostname === env.BASE_DOMAIN || hostname.endsWith(`.${env.BASE_DOMAIN}`);
+  } catch {
+    return false;
+  }
+};
+
 app.use(cors({
-  origin: env.FRONTEND_URL,
+  origin: (origin, callback) => callback(null, !origin || isAllowedOrigin(origin)),
   credentials: true,
 }));
 app.use(express.json());
@@ -34,8 +47,10 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// API nền tảng (Super Admin): không thuộc tenant nào, phải đặt trước resolveTenant
+app.use('/api/platform', platformRoutes);
+app.use('/api', resolveTenant);
 app.use('/api', router);
-app.use('/uploads', express.static('uploads'));
 app.use('/api', materialRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);

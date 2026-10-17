@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { env } from './config/env';
 import { app } from './app';
 import { connectDB, disconnectDB } from './database/db';
+import { disconnectAdminDB } from './database/admin-db';
 
 const startServer = async () => {
   try {
@@ -28,6 +29,7 @@ const startServer = async () => {
       console.log(`\n${signal} received. Shutting down gracefully...`);
       server.close(async () => {
         await disconnectDB();
+        await disconnectAdminDB();
         console.log('Database disconnected.');
         process.exit(0);
       });

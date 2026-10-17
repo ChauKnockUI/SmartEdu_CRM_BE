@@ -1,5 +1,6 @@
 import { Prisma } from '../generated/prisma';
 import { prisma } from '../database/db';
+import { currentTenantId } from '../database/tenant-context';
 
 export class RoomRepository {
     async findMany(params: {
@@ -23,7 +24,7 @@ export class RoomRepository {
 
     async findByName(name: string) {
         return await prisma.room.findUnique({
-            where: { name }
+            where: { tenant_id_name: { tenant_id: currentTenantId(), name } }
         });
     }
 

@@ -344,20 +344,23 @@ export class LeadService {
      */
     async getLeadFunnel(query: GetFunnelQuery) {
         const { assigned_to, source, course_id, date_from, date_to } = query;
-        const where: Prisma.LeadWhereInput = {};
-
-        if (assigned_to) where.assigned_to = assigned_to;
-        if (source) where.lead_source = source;
-        if (course_id) where.course_id = course_id;
-        if (date_from || date_to) {
-            where.createdAt = {};
-            if (date_from) where.createdAt.gte = new Date(date_from);
-            if (date_to) where.createdAt.lte = new Date(date_to);
-        }
-
-        const rawLeads = await leadRepository.getFunnelData(where);
         const now = new Date();
         const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+        // Gom số liệu ngay trong DB thay vì tải toàn bộ lead vào bộ nhớ
+        const rows = await leadRepository.getFunnelAggregates({
+            assigned_to,
+            source,
+            course_id,
+            date_from: date_from ? new Date(date_from) : undefined,
+            date_to: date_to ? new Date(date_to) : undefined,
+            staleBefore: threeDaysAgo,
+        });
+
+        const ACTIVE = ['new', 'contacted', 'interested', 'trial'];
+        const sumBy = (statuses: string[] | null, f: (r: typeof rows[number]) => number) =>
+            rows.filter(r => !statuses || statuses.includes(r.status)).reduce((acc, r) => acc + f(r), 0);
+        const countOf = (statuses: string[] | null) => sumBy(statuses, r => r.count);
 
         const STAGES: { key: LeadStatus; label: string; description: string; color: string }[] = [
             { key: 'new', label: 'Mới tiếp nhận', description: 'Lead mới từ marketing / website', color: '#1677ff' },
@@ -369,65 +372,39 @@ export class LeadService {
         ];
 
         // Khởi tạo nhóm thống kê theo từng tầng phễu
+        const totalLeads = countOf(null);
         const stageStats = STAGES.map(s => {
-            const leadsInStage = rawLeads.filter(l => l.status === s.key);
-            const count = leadsInStage.length;
-            const totalValue = leadsInStage.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0);
-            const weightedValue = leadsInStage.reduce((sum, l) => {
-                const fee = l.course?.fee ? Number(l.course.fee) : 0;
-                const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
-                const probability = rawScore > 1 ? rawScore / 100 : rawScore;
-                return sum + fee * probability;
-            }, 0);
-            const totalScore = leadsInStage.reduce((sum, l) => {
-                const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
-                const scorePercent = rawScore <= 1 ? rawScore * 100 : rawScore;
-                return sum + scorePercent;
-            }, 0);
-            const avgScore = count > 0 ? Math.round(totalScore / count) : 0;
-            const staleCount = leadsInStage.filter(l => {
-                if (['new', 'contacted', 'interested', 'trial'].includes(l.status)) {
-                    return !l.last_contacted || new Date(l.last_contacted) < threeDaysAgo;
-                }
-                return false;
-            }).length;
-
+            const only = [s.key as string];
+            const count = countOf(only);
             return {
                 stage: s.key,
                 label: s.label,
                 description: s.description,
                 color: s.color,
                 count,
-                percentage: rawLeads.length > 0 ? Number(((count / rawLeads.length) * 100).toFixed(1)) : 0,
-                totalValue,
-                weightedValue: Math.round(weightedValue),
-                avgScore,
-                staleCount
+                percentage: totalLeads > 0 ? Number(((count / totalLeads) * 100).toFixed(1)) : 0,
+                totalValue: sumBy(only, r => r.feeSum),
+                weightedValue: Math.round(sumBy(only, r => r.weightedSum)),
+                avgScore: count > 0 ? Math.round(sumBy(only, r => r.scoreSum) / count) : 0,
+                staleCount: sumBy(only, r => r.staleCount)
             };
         });
 
-        const totalLeads = rawLeads.length;
-        const activeLeads = rawLeads.filter(l => ['new', 'contacted', 'interested', 'trial'].includes(l.status));
-        const activePipelineValue = activeLeads.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0);
-        const weightedPipelineValue = activeLeads.reduce((sum, l) => {
-            const fee = l.course?.fee ? Number(l.course.fee) : 0;
-            const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
-            const probability = rawScore > 1 ? rawScore / 100 : rawScore;
-            return sum + fee * probability;
-        }, 0);
-
-        const enrolledLeads = rawLeads.filter(l => l.status === 'enrolled');
-        const lostLeads = rawLeads.filter(l => l.status === 'lost');
-        const closedCount = enrolledLeads.length + lostLeads.length;
+        const activeCount = countOf(ACTIVE);
+        const activePipelineValue = sumBy(ACTIVE, r => r.feeSum);
+        const weightedPipelineValue = sumBy(ACTIVE, r => r.weightedSum);
+        const enrolledCount = countOf(['enrolled']);
+        const lostCount = countOf(['lost']);
+        const closedCount = enrolledCount + lostCount;
         const winRate = closedCount > 0
-            ? Number(((enrolledLeads.length / closedCount) * 100).toFixed(1))
-            : (totalLeads > 0 ? Number(((enrolledLeads.length / totalLeads) * 100).toFixed(1)) : 0);
+            ? Number(((enrolledCount / closedCount) * 100).toFixed(1))
+            : (totalLeads > 0 ? Number(((enrolledCount / totalLeads) * 100).toFixed(1)) : 0);
 
         // Chuỗi dịch chuyển phễu từ trên xuống dưới (Step-by-Step Conversion Progression)
-        const progressedContacted = rawLeads.filter(l => ['contacted', 'interested', 'trial', 'enrolled'].includes(l.status)).length;
-        const progressedInterested = rawLeads.filter(l => ['interested', 'trial', 'enrolled'].includes(l.status)).length;
-        const progressedTrial = rawLeads.filter(l => ['trial', 'enrolled'].includes(l.status)).length;
-        const progressedEnrolled = enrolledLeads.length;
+        const progressedContacted = countOf(['contacted', 'interested', 'trial', 'enrolled']);
+        const progressedInterested = countOf(['interested', 'trial', 'enrolled']);
+        const progressedTrial = countOf(['trial', 'enrolled']);
+        const progressedEnrolled = enrolledCount;
 
         const progressionFunnel = [
             {
@@ -474,13 +451,13 @@ export class LeadService {
 
         // Phân tích hiệu quả theo nguồn Lead (Lead Source ROI)
         const sourceMap = new Map<string, { total: number; enrolled: number; value: number }>();
-        rawLeads.forEach(l => {
-            const src = l.lead_source || 'other';
+        rows.forEach(r => {
+            const src = r.source || 'other';
             const curr = sourceMap.get(src) || { total: 0, enrolled: 0, value: 0 };
-            curr.total += 1;
-            if (l.status === 'enrolled') {
-                curr.enrolled += 1;
-                curr.value += (l.course?.fee ? Number(l.course.fee) : 0);
+            curr.total += r.count;
+            if (r.status === 'enrolled') {
+                curr.enrolled += r.count;
+                curr.value += r.feeSum;
             }
             sourceMap.set(src, curr);
         });
@@ -496,14 +473,14 @@ export class LeadService {
         return {
             summary: {
                 totalLeads,
-                activePipelineCount: activeLeads.length,
+                activePipelineCount: activeCount,
                 activePipelineValue,
                 weightedPipelineValue: Math.round(weightedPipelineValue),
-                enrolledCount: enrolledLeads.length,
-                enrolledValue: enrolledLeads.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0),
-                lostCount: lostLeads.length,
+                enrolledCount,
+                enrolledValue: sumBy(['enrolled'], r => r.feeSum),
+                lostCount,
                 winRate,
-                staleLeadsCount: rawLeads.filter(l => ['new', 'contacted', 'interested', 'trial'].includes(l.status) && (!l.last_contacted || new Date(l.last_contacted) < threeDaysAgo)).length
+                staleLeadsCount: sumBy(ACTIVE, r => r.staleCount)
             },
             stages: stageStats,
             progressionFunnel,

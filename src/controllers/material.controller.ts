@@ -27,7 +27,6 @@ export const materialController = {
             const classId = Number(req.params.classId);
             const userId = (req as any).user?.userId;
             const role = (req as any).user?.role;
-            console.log('=== UPLOAD ===', { userId, role });
 
             if (!req.file) {
                 return res.status(400).json({
