@@ -27,6 +27,12 @@ export class AttendanceService {
       where: { id: schedule_id },
       include: {
         teacher: { select: { user_id: true } },
+        class: {
+          select: {
+            id: true,
+            teacher: { select: { user_id: true } }
+          }
+        }
       },
     });
 
@@ -37,7 +43,8 @@ export class AttendanceService {
     }
 
     if (user_role !== 'admin') {
-      if (user_role !== 'teacher' || schedule.teacher?.user_id !== user_id) {
+      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
+      if (user_role !== 'teacher' || assignedTeacherUserId !== user_id) {
         const err = new Error('Bạn không có quyền điểm danh cho buổi học này');
         (err as any).statusCode = 403;
         throw err;
@@ -60,7 +67,7 @@ export class AttendanceService {
     const diffHours =
       (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
 
-    if (diffHours > 48 && user_role !== 'admin') {
+    if (diffHours > 48 && user_role !== 'admin' && !schedule.is_attendance_unlocked) {
       const err = new Error(
         'Dữ liệu đã bị khóa sau 48h. Vui lòng liên hệ Admin để sửa đổi.'
       );
@@ -116,9 +123,14 @@ export class AttendanceService {
     const schedule = await prisma.schedule.findUnique({
       where: { id: scheduleId },
       include: {
-        class: { select: { id: true } },
+        class: {
+          select: {
+            id: true,
+            teacher: { select: { user_id: true } }
+          }
+        },
         teacher: { select: { user_id: true } },
-      },
+      }
     });
 
     if (!schedule) {
@@ -128,7 +140,8 @@ export class AttendanceService {
     }
 
     if (userRole !== 'admin') {
-      if (userRole === 'teacher' && schedule.teacher?.user_id !== userId) {
+      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
+      if (userRole === 'teacher' && assignedTeacherUserId !== userId) {
         const err = new Error('Bạn không có quyền xem buổi học này');
         (err as any).statusCode = 403;
         throw err;
@@ -161,6 +174,34 @@ export class AttendanceService {
   }
 
   async getAbsenceList(scheduleId: number, userId: number, userRole: string) {
+    const schedule = await prisma.schedule.findUnique({
+      where: { id: scheduleId },
+      include: {
+        class: {
+          select: {
+            id: true,
+            teacher: { select: { user_id: true } }
+          }
+        },
+        teacher: { select: { user_id: true } },
+      }
+    });
+
+    if (!schedule) {
+      const err = new Error('Không tìm thấy buổi học');
+      (err as any).statusCode = 404;
+      throw err;
+    }
+
+    if (userRole !== 'admin') {
+      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
+      if (userRole === 'teacher' && assignedTeacherUserId !== userId) {
+        const err = new Error('Bạn không có quyền xem buổi học này');
+        (err as any).statusCode = 403;
+        throw err;
+      }
+    }
+
     return await attendanceRepository.getAbsenceList(scheduleId);
   }
 

@@ -1,4 +1,4 @@
-import { AttendanceStatus } from '../generated/prisma';
+import { AttendanceStatus, Prisma, ScheduleStatus } from '../generated/prisma';
 import { prisma } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
 
@@ -6,6 +6,15 @@ export interface AttendanceInput {
     student_id: number;
     status: AttendanceStatus;
     notes?: string;
+}
+
+export interface GetAllSchedulesQuery {
+    startDate?: Date;
+    endDate?: Date;
+    classId?: number;
+    teacherId?: number;
+    roomId?: number;
+    status?: ScheduleStatus;
 }
 
 export class ScheduleService {
@@ -19,9 +28,8 @@ export class ScheduleService {
         const schedule = await prisma.schedule.findUnique({
             where: { id: schedule_id },
             include: {
-                teacher: {
-                    select: { user_id: true }
-                }
+                teacher: { select: { user_id: true } },
+                class: { select: { teacher: { select: { user_id: true } } } }
             }
         });
 
@@ -33,7 +41,8 @@ export class ScheduleService {
 
         // 2. Authorization
         if (user_role !== 'admin') {
-            if (user_role !== 'teacher' || schedule.teacher?.user_id !== user_id) {
+            const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
+            if (user_role !== 'teacher' || assignedTeacherUserId !== user_id) {
                 const err = new Error('Bạn không có quyền điểm danh cho buổi học này');
                 (err as any).statusCode = 403;
                 throw err;
@@ -57,7 +66,7 @@ export class ScheduleService {
         const now = new Date();
         const diffHours = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
 
-        if (diffHours > 48 && user_role !== 'admin') {
+        if (diffHours > 48 && user_role !== 'admin' && !schedule.is_attendance_unlocked) {
             const err = new Error('Dữ liệu đã bị khóa sau 48h. Vui lòng liên hệ Admin để sửa đổi.');
             (err as any).statusCode = 403;
             throw err;
@@ -105,11 +114,10 @@ export class ScheduleService {
         if (role === 'teacher') {
             return prisma.schedule.findMany({
                 where: {
-                    class: {
-                        teacher: {
-                            user_id,
-                        },
-                    },
+                    OR: [
+                        { teacher: { user_id } },
+                        { class: { teacher: { user_id } } },
+                    ],
                 },
                 include: {
                     class: true,
@@ -165,11 +173,78 @@ export class ScheduleService {
                 room: {
                     select: { id: true, name: true }
                 },
+                teacher: {
+                    select: { id: true, full_name: true }
+                },
                 attendances: {
                     select: { id: true, student_id: true, status: true }
                 },
             },
             orderBy: { date: 'asc' },
+        });
+    }
+
+    async getAllSchedules(query: GetAllSchedulesQuery = {}) {
+        const { startDate, endDate, classId, teacherId, roomId, status } = query;
+        const where: Prisma.ScheduleWhereInput = {};
+
+        if (startDate || endDate) {
+            where.date = {
+                ...(startDate ? { gte: startDate } : {}),
+                ...(endDate ? { lte: endDate } : {}),
+            };
+        }
+
+        if (classId) {
+            where.class_id = classId;
+        }
+
+        if (teacherId) {
+            where.OR = [
+                { teacher_id: teacherId },
+                { class: { teacher_id: teacherId } },
+            ];
+        }
+
+        if (roomId) {
+            where.OR = [
+                { room_id: roomId },
+                { class: { room_id: roomId } },
+            ];
+        }
+
+        if (status) {
+            where.status = status;
+        }
+
+        return prisma.schedule.findMany({
+            where,
+            include: {
+                class: {
+                    select: {
+                        id: true,
+                        name: true,
+                        status: true,
+                        course_id: true,
+                        course: { select: { id: true, name: true } },
+                        teacher: { select: { id: true, full_name: true } },
+                        room: { select: { id: true, name: true } },
+                    }
+                },
+                room: { select: { id: true, name: true } },
+                teacher: { select: { id: true, full_name: true } },
+                attendances: {
+                    select: {
+                        id: true,
+                        student_id: true,
+                        status: true,
+                    }
+                },
+            },
+            orderBy: [
+                { date: 'asc' },
+                { start_time: 'asc' },
+            ],
         });
     }
 }

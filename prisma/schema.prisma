@@ -29,10 +29,28 @@ model User {
   assignmentsCreated Assignment[]        @relation("AssignmentCreator")
   student          Student?
   teacher          Teacher?
+  notifications    Notification[]
 
   @@index([role])
   @@index([is_active])
   @@map("users")
+}
+
+model Notification {
+  id          Int                  @id @default(autoincrement())
+  user_id     Int
+  type        NotificationType     @default(general)
+  title       String               @db.VarChar(255)
+  message     String               @db.Text
+  link        String?              @db.VarChar(500)
+  is_read     Boolean              @default(false)
+  metadata    Json?
+  createdAt   DateTime             @default(now()) @db.Timestamptz(6)
+  user        User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, is_read])
+  @@index([createdAt(sort: Desc)])
+  @@map("notifications")
 }
 
 model Lead {
@@ -262,6 +280,8 @@ model Schedule {
   class       Class?         @relation(fields: [class_id], references: [id], onDelete: Cascade)
   room        Room?          @relation(fields: [room_id], references: [id])
   teacher     Teacher?       @relation(fields: [teacher_id], references: [id])
+  is_attendance_unlocked Boolean @default(false)
+  attendance_unlocked_at DateTime?
 
   @@index([date])
   @@index([class_id])
@@ -632,4 +652,11 @@ enum PredictionType {
   lead_score
   dropout_risk
   revenue_forecast
+}
+
+enum NotificationType {
+  general
+  attendance_reminder
+  overdue_attendance
+  system_alert
 }

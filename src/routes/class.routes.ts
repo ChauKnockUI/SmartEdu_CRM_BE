@@ -28,7 +28,13 @@ router.post('/', authorize('admin'), classController.createClass);
 // Cập nhật thông tin lớp học
 router.put('/:id', authorize('admin'), classController.updateClass);
 
+//Kiểm tra xung đột lịch học của học viên trước
+router.post('/:id/check-conflicts', authorize('admin', 'sale'), classController.checkStudentConflicts);
+
 // Ghi danh học viên vào lớp (Academic Enrollment)
 router.post('/:id/enroll', authorize('admin', 'sale'), classController.enrollStudent);
+
+// Hủy ghi danh học viên khỏi lớp
+router.delete('/:id/enroll/:studentId', authorize('admin'), classController.unenrollStudent);
 
 export default router;

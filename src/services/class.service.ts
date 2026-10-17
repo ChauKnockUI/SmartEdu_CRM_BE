@@ -10,6 +10,7 @@ export interface GetClassesQuery {
     status?: ClassStatus;
     course_id?: number;
     teacher_id?: number;
+    unassigned_teacher?: boolean;
 }
 
 export interface CreateClassInput {
@@ -36,7 +37,7 @@ export class ClassService {
     }
 
     async getClasses(query: GetClassesQuery) {
-        const { page = 1, limit = 10, search, status, course_id, teacher_id } = query;
+        const { page = 1, limit = 10, search, status, course_id, teacher_id, unassigned_teacher } = query;
         const skip = (page - 1) * limit;
 
         const where: Prisma.ClassWhereInput = {};
@@ -56,7 +57,9 @@ export class ClassService {
             where.course_id = course_id;
         }
 
-        if (teacher_id) {
+        if (unassigned_teacher) {
+            where.teacher_id = null;
+        } else if (teacher_id) {
             where.teacher_id = teacher_id;
         }
 
@@ -82,7 +85,8 @@ export class ClassService {
     }
 
     async getClassById(id: number) {
-        return await classRepository.findById(id);
+        const classData = await classRepository.findById(id);
+        return await this.syncClassStatus(classData);
     }
 
     // Helper function to parse HH:mm into Date object (1970-01-01)
@@ -334,21 +338,21 @@ export class ClassService {
         const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
         const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
 
-        if (datesToCheck.length === 0) return [];
+        const allRooms = await prisma.room.findMany({
+            where: { is_active: true },
+            select: { id: true, name: true, capacity: true },
+            orderBy: { name: 'asc' }
+        });
+
+        if (datesToCheck.length === 0) {
+            return allRooms.map(room => ({ ...room, is_available: true }));
+        }
 
         const { conflictingRooms } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb, excludeClassId);
 
-        const rooms = await prisma.room.findMany({
-            where: {
-                is_active: true,
-                id: { notIn: conflictingRooms }
-            },
-            select: { id: true, name: true, capacity: true }
-        });
-
-        return rooms.map(room => ({
+        return allRooms.map(room => ({
             ...room,
-            is_available: true
+            is_available: !conflictingRooms.includes(room.id)
         }));
     }
 
@@ -359,25 +363,99 @@ export class ClassService {
         const endTimeDb = this.parseTimeToDate(scheduleTime[1]);
         const datesToCheck = this.generateScheduleDates(startDate, endDate, scheduleDays);
 
-        if (datesToCheck.length === 0) return [];
+        const allTeachers = await prisma.teacher.findMany({
+            where: { is_active: true },
+            select: { id: true, full_name: true, email: true },
+            orderBy: { full_name: 'asc' }
+        });
+
+        if (datesToCheck.length === 0) {
+            return allTeachers.map(teacher => ({ ...teacher, is_available: true }));
+        }
 
         const { conflictingTeachers } = await classRepository.findConflictingResources(datesToCheck, startTimeDb, endTimeDb, excludeClassId);
 
-        const teachers = await prisma.teacher.findMany({
-            where: {
-                is_active: true,
-                id: { notIn: conflictingTeachers }
-            },
-            select: { id: true, full_name: true, email: true }
-        });
-
-        return teachers.map(teacher => ({
+        return allTeachers.map(teacher => ({
             ...teacher,
-            is_available: true
+            is_available: !conflictingTeachers.includes(teacher.id)
         }));
     }
 
-    async enrollStudents(class_id: number, student_ids: number[]) {
+    // Kiểm tra trùng lịch cho học viên trước khi xếp lớp
+    async checkStudentConflicts(class_id: number, student_ids: number[]) {
+        const targetClass = await prisma.class.findUnique({
+            where: { id: class_id },
+            include: {
+                classEnrollments: { where: { status: 'active' } },
+                schedules: { where: { date: { gte: new Date() } } }
+            }
+        });
+        if (!targetClass) {
+            const err = new Error('Không tìm thấy Lớp học');
+            (err as any).statusCode = 404;
+            throw err;
+        }
+        const studentEnrollments = await prisma.classEnrollment.findMany({
+            where: {
+                student_id: { in: student_ids },
+                status: 'active'
+            },
+            include: {
+                class: {
+                    include: {
+                        schedules: {
+                            where: { date: { gte: new Date() } }
+                        }
+                    }
+                }
+            }
+        });
+        const targetSchedules = targetClass.schedules;
+        const enrolledStudentIds = new Set(targetClass.classEnrollments.map((e: any) => e.student_id));
+        const result: Record<number, { has_conflict: boolean; is_already_enrolled: boolean; reason?: string }> = {};
+        for (const s_id of student_ids) {
+            if (enrolledStudentIds.has(s_id)) {
+                result[s_id] = {
+                    has_conflict: false,
+                    is_already_enrolled: true,
+                    reason: 'Đã có trong lớp học này'
+                };
+                continue;
+            }
+            const myEnrollments = studentEnrollments.filter((e: any) => e.student_id === s_id);
+            let hasConflict = false;
+            let conflictReason = '';
+            for (const enrollment of myEnrollments) {
+                if (hasConflict) break;
+                // Bỏ qua nếu chính là lớp hiện tại
+                if (enrollment.class_id === class_id) continue;
+                const existingSchedules = enrollment.class.schedules;
+                for (const newSch of targetSchedules) {
+                    if (hasConflict) break;
+                    if (!newSch.start_time || !newSch.end_time) continue;
+                    for (const exSch of existingSchedules) {
+                        if (!exSch.start_time || !exSch.end_time) continue;
+                        const dateA = new Date(newSch.date).toISOString().slice(0, 10);
+                        const dateB = new Date(exSch.date).toISOString().slice(0, 10);
+                        if (dateA === dateB) {
+                            if (newSch.start_time < exSch.end_time && newSch.end_time > exSch.start_time) {
+                                hasConflict = true;
+                                conflictReason = `Trùng với ${enrollment.class.name} (${dateA})`;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            result[s_id] = {
+                has_conflict: hasConflict,
+                is_already_enrolled: false,
+                reason: hasConflict ? conflictReason : undefined
+            };
+        }
+        return result;
+    }
+    async enrollStudents(class_id: number, student_ids: number[], allow_conflicts: boolean = false) {
         // 1. Lấy thông tin lớp học, sĩ số và lịch học
         const targetClass = await prisma.class.findUnique({
             where: { id: class_id },
@@ -447,8 +525,10 @@ export class ClassService {
                         if (!exSch.start_time || !exSch.end_time) continue;
 
                         // So sánh ngày
-                        if (newSch.date.getTime() === exSch.date.getTime()) {
-                            // So sánh giờ: (StartA < EndB) && (EndA > StartB)
+                        const dateA = new Date(newSch.date).toISOString().slice(0, 10);
+                        const dateB = new Date(exSch.date).toISOString().slice(0, 10);
+                        if (dateA === dateB) {
+                            // So sánh giờ
                             if (newSch.start_time < exSch.end_time && newSch.end_time > exSch.start_time) {
                                 const dateStr = newSch.date.toISOString().split('T')[0];
                                 failed.push({ student_id: s_id, reason: `Trùng lịch lớp ${enrollment.class.name} ngày ${dateStr}` });
@@ -460,7 +540,7 @@ export class ClassService {
                 }
             }
 
-            if (!hasConflict) {
+            if (!hasConflict || allow_conflicts) {
                 successful_ids.push(s_id);
             }
         }
@@ -492,6 +572,65 @@ export class ClassService {
             successful: successful_ids,
             failed: failed
         };
+    }
+
+    async unenrollStudent(class_id: number, student_id: number) {
+        const enrollment = await prisma.classEnrollment.findFirst({
+            where: {
+                class_id,
+                student_id
+            }
+        });
+
+        if (!enrollment) {
+            const err = new Error('Học viên không có trong lớp học này');
+            (err as any).statusCode = 404;
+            throw err;
+        }
+
+        await prisma.classEnrollment.delete({
+            where: { id: enrollment.id }
+        });
+
+        return {
+            success: true,
+            message: 'Đã hủy ghi danh học viên khỏi lớp'
+        };
+    }
+
+    // Trong class.service.ts:
+    private async syncClassStatus(cls: any) {
+        if (!cls || cls.status === 'cancelled' || !cls.start_date) return cls;
+
+        const now = new Date();
+        const startDate = new Date(cls.start_date);
+        const endDate = cls.end_date ? new Date(cls.end_date) : null;
+
+        let newStatus = cls.status;
+
+        // Đã qua ngày bắt đầu nhưng chưa tới ngày kết thúc -> ongoing
+        if (now >= startDate && (!endDate || now <= endDate)) {
+            if (cls.status === 'upcoming') {
+                newStatus = 'ongoing';
+            }
+        }
+        // Đã qua ngày kết thúc -> completed
+        else if (endDate && now > endDate) {
+            if (cls.status !== 'completed') {
+                newStatus = 'completed';
+            }
+        }
+
+        // Nếu trạng thái thay đổi -> cập nhật luôn vào Database
+        if (newStatus !== cls.status) {
+            await prisma.class.update({
+                where: { id: cls.id },
+                data: { status: newStatus },
+            });
+            cls.status = newStatus;
+        }
+
+        return cls;
     }
 }
 

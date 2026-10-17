@@ -13,6 +13,7 @@ import financeRouter from './finance.routes';
 import assignmentRouter from './assignment.routes';
 import dashboardRouter from './dashboard.routes';
 import userRouter from './user.routes';
+import notificationRouter from './notification.routes';
 
 const router = Router();
 
@@ -25,6 +26,7 @@ router.get('/', (_req, res) => {
 router.use('/auth', authRouter);
 router.use('/dashboard', dashboardRouter);
 router.use('/users', userRouter);
+router.use('/notifications', notificationRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);

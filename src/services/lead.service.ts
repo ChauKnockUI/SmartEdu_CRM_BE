@@ -34,6 +34,15 @@ export interface UpdateLeadInput {
     study_purpose?: string;
     source?: string;
     course_id?: number;
+    lost_reason?: string;
+}
+
+export interface GetFunnelQuery {
+    assigned_to?: number;
+    source?: string;
+    course_id?: number;
+    date_from?: string;
+    date_to?: string;
 }
 
 export interface CreateLeadActivityInput {
@@ -259,27 +268,66 @@ export class LeadService {
 
     /**
      * Cập nhật thông tin Lead (Không thay đổi createdAt), Trigger AI nếu cần
+     * Tự động ghi lại Activity khi chuyển giai đoạn (Pipeline Stage Change)
      */
-    async updateLead(id: number, data: UpdateLeadInput) {
-        const lead = await leadRepository.checkExistence(id);
+    async updateLead(id: number, data: UpdateLeadInput, userId?: number) {
+        const lead = await leadRepository.findById(id);
         if (!lead) return null;
+
+        const oldStatus = lead.status;
+        const isStatusChanged = Boolean(data.status && data.status !== oldStatus);
+
+        let notesToSave = data.notes !== undefined ? data.notes : lead.notes;
+        if (data.lost_reason) {
+            const reasonPrefix = `[Lý do mất lead: ${data.lost_reason}]`;
+            notesToSave = notesToSave ? `${reasonPrefix} ${notesToSave}` : reasonPrefix;
+        }
 
         const updatedLead = await leadRepository.update(id, {
             status: data.status,
             assigned_to: data.assigned_to,
-            notes: data.notes,
+            notes: notesToSave,
             occupation: data.occupation,
             study_purpose: data.study_purpose,
             lead_source: data.source,
             course_id: data.course_id,
         });
 
+        // Tự động ghi nhận Activity lịch sử khi chuyển trạng thái / giai đoạn phễu
+        if (isStatusChanged) {
+            const statusLabelsMap: Record<string, string> = {
+                new: 'Mới',
+                contacted: 'Đã liên hệ',
+                interested: 'Quan tâm',
+                trial: 'Học thử',
+                enrolled: 'Đã đăng ký',
+                lost: 'Thất bại (Lost)'
+            };
+            const oldLabel = statusLabelsMap[oldStatus] || oldStatus;
+            const newLabel = statusLabelsMap[data.status!] || data.status!;
+            let activityContent = `Chuyển giai đoạn phễu: "${oldLabel}" ➔ "${newLabel}"`;
+            if (data.lost_reason) {
+                activityContent += `. Lý do: ${data.lost_reason}`;
+            }
+            if (data.notes) {
+                activityContent += ` (Ghi chú: ${data.notes})`;
+            }
+
+            leadRepository.createActivity({
+                lead_id: id,
+                type: 'status_change',
+                content: activityContent,
+                user_id: userId,
+            }).catch(err => {
+                console.error('[LeadService] Ghi log status_change activity lỗi:', err.message);
+            });
+        }
+
         // Chỉ trigger AI khi Sale thay đổi các thông số lõi (Core Features) làm ảnh hưởng trọng số AI
-        // Giảm tải áp lực thừa thãi lên Microservice Python
         const aiFeatureTriggers: (keyof UpdateLeadInput)[] = [
             'status', 'occupation', 'study_purpose', 'source', 'course_id'
         ];
-        
+
         const shouldScore = aiFeatureTriggers.some(field => data[field] !== undefined);
 
         if (shouldScore) {
@@ -289,6 +337,178 @@ export class LeadService {
         }
 
         return updatedLead;
+    }
+
+    /**
+     * Báo cáo Phễu bán hàng (Sales Funnel & Pipeline Analytics)
+     */
+    async getLeadFunnel(query: GetFunnelQuery) {
+        const { assigned_to, source, course_id, date_from, date_to } = query;
+        const where: Prisma.LeadWhereInput = {};
+
+        if (assigned_to) where.assigned_to = assigned_to;
+        if (source) where.lead_source = source;
+        if (course_id) where.course_id = course_id;
+        if (date_from || date_to) {
+            where.createdAt = {};
+            if (date_from) where.createdAt.gte = new Date(date_from);
+            if (date_to) where.createdAt.lte = new Date(date_to);
+        }
+
+        const rawLeads = await leadRepository.getFunnelData(where);
+        const now = new Date();
+        const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+        const STAGES: { key: LeadStatus; label: string; description: string; color: string }[] = [
+            { key: 'new', label: 'Mới tiếp nhận', description: 'Lead mới từ marketing / website', color: '#1677ff' },
+            { key: 'contacted', label: 'Đã liên hệ', description: 'Sale đã tương tác cuộc gọi / tin nhắn đầu tiên', color: '#13c2c2' },
+            { key: 'interested', label: 'Quan tâm', description: 'Khách hàng có nhu cầu học rõ ràng', color: '#faad14' },
+            { key: 'trial', label: 'Học thử', description: 'Đang xếp lịch hoặc đang tham gia học thử', color: '#722ed1' },
+            { key: 'enrolled', label: 'Đã đăng ký (Won)', description: 'Chốt thành công, nhập học', color: '#52c41a' },
+            { key: 'lost', label: 'Thất bại (Lost)', description: 'Khách hàng từ chối hoặc mất liên lạc', color: '#f5222d' }
+        ];
+
+        // Khởi tạo nhóm thống kê theo từng tầng phễu
+        const stageStats = STAGES.map(s => {
+            const leadsInStage = rawLeads.filter(l => l.status === s.key);
+            const count = leadsInStage.length;
+            const totalValue = leadsInStage.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0);
+            const weightedValue = leadsInStage.reduce((sum, l) => {
+                const fee = l.course?.fee ? Number(l.course.fee) : 0;
+                const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
+                const probability = rawScore > 1 ? rawScore / 100 : rawScore;
+                return sum + fee * probability;
+            }, 0);
+            const totalScore = leadsInStage.reduce((sum, l) => {
+                const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
+                const scorePercent = rawScore <= 1 ? rawScore * 100 : rawScore;
+                return sum + scorePercent;
+            }, 0);
+            const avgScore = count > 0 ? Math.round(totalScore / count) : 0;
+            const staleCount = leadsInStage.filter(l => {
+                if (['new', 'contacted', 'interested', 'trial'].includes(l.status)) {
+                    return !l.last_contacted || new Date(l.last_contacted) < threeDaysAgo;
+                }
+                return false;
+            }).length;
+
+            return {
+                stage: s.key,
+                label: s.label,
+                description: s.description,
+                color: s.color,
+                count,
+                percentage: rawLeads.length > 0 ? Number(((count / rawLeads.length) * 100).toFixed(1)) : 0,
+                totalValue,
+                weightedValue: Math.round(weightedValue),
+                avgScore,
+                staleCount
+            };
+        });
+
+        const totalLeads = rawLeads.length;
+        const activeLeads = rawLeads.filter(l => ['new', 'contacted', 'interested', 'trial'].includes(l.status));
+        const activePipelineValue = activeLeads.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0);
+        const weightedPipelineValue = activeLeads.reduce((sum, l) => {
+            const fee = l.course?.fee ? Number(l.course.fee) : 0;
+            const rawScore = l.aiScore?.probability_score ? Number(l.aiScore.probability_score) : 0;
+            const probability = rawScore > 1 ? rawScore / 100 : rawScore;
+            return sum + fee * probability;
+        }, 0);
+
+        const enrolledLeads = rawLeads.filter(l => l.status === 'enrolled');
+        const lostLeads = rawLeads.filter(l => l.status === 'lost');
+        const closedCount = enrolledLeads.length + lostLeads.length;
+        const winRate = closedCount > 0
+            ? Number(((enrolledLeads.length / closedCount) * 100).toFixed(1))
+            : (totalLeads > 0 ? Number(((enrolledLeads.length / totalLeads) * 100).toFixed(1)) : 0);
+
+        // Chuỗi dịch chuyển phễu từ trên xuống dưới (Step-by-Step Conversion Progression)
+        const progressedContacted = rawLeads.filter(l => ['contacted', 'interested', 'trial', 'enrolled'].includes(l.status)).length;
+        const progressedInterested = rawLeads.filter(l => ['interested', 'trial', 'enrolled'].includes(l.status)).length;
+        const progressedTrial = rawLeads.filter(l => ['trial', 'enrolled'].includes(l.status)).length;
+        const progressedEnrolled = enrolledLeads.length;
+
+        const progressionFunnel = [
+            {
+                step: '1. Đầu phễu (Tổng Lead)',
+                stage: 'new',
+                count: totalLeads,
+                percentOfTotal: 100,
+                conversionFromPrevious: 100,
+                color: '#1677ff'
+            },
+            {
+                step: '2. Đã tiếp cận (Contacted)',
+                stage: 'contacted',
+                count: progressedContacted,
+                percentOfTotal: totalLeads > 0 ? Number(((progressedContacted / totalLeads) * 100).toFixed(1)) : 0,
+                conversionFromPrevious: totalLeads > 0 ? Number(((progressedContacted / totalLeads) * 100).toFixed(1)) : 0,
+                color: '#13c2c2'
+            },
+            {
+                step: '3. Quan tâm cao (Interested)',
+                stage: 'interested',
+                count: progressedInterested,
+                percentOfTotal: totalLeads > 0 ? Number(((progressedInterested / totalLeads) * 100).toFixed(1)) : 0,
+                conversionFromPrevious: progressedContacted > 0 ? Number(((progressedInterested / progressedContacted) * 100).toFixed(1)) : 0,
+                color: '#faad14'
+            },
+            {
+                step: '4. Vào học thử (Trial)',
+                stage: 'trial',
+                count: progressedTrial,
+                percentOfTotal: totalLeads > 0 ? Number(((progressedTrial / totalLeads) * 100).toFixed(1)) : 0,
+                conversionFromPrevious: progressedInterested > 0 ? Number(((progressedTrial / progressedInterested) * 100).toFixed(1)) : 0,
+                color: '#722ed1'
+            },
+            {
+                step: '5. Chốt đăng ký (Enrolled)',
+                stage: 'enrolled',
+                count: progressedEnrolled,
+                percentOfTotal: totalLeads > 0 ? Number(((progressedEnrolled / totalLeads) * 100).toFixed(1)) : 0,
+                conversionFromPrevious: progressedTrial > 0 ? Number(((progressedEnrolled / progressedTrial) * 100).toFixed(1)) : 0,
+                color: '#52c41a'
+            }
+        ];
+
+        // Phân tích hiệu quả theo nguồn Lead (Lead Source ROI)
+        const sourceMap = new Map<string, { total: number; enrolled: number; value: number }>();
+        rawLeads.forEach(l => {
+            const src = l.lead_source || 'other';
+            const curr = sourceMap.get(src) || { total: 0, enrolled: 0, value: 0 };
+            curr.total += 1;
+            if (l.status === 'enrolled') {
+                curr.enrolled += 1;
+                curr.value += (l.course?.fee ? Number(l.course.fee) : 0);
+            }
+            sourceMap.set(src, curr);
+        });
+
+        const sourcePerformance = Array.from(sourceMap.entries()).map(([source, stats]) => ({
+            source,
+            total: stats.total,
+            enrolled: stats.enrolled,
+            conversionRate: stats.total > 0 ? Number(((stats.enrolled / stats.total) * 100).toFixed(1)) : 0,
+            revenue: stats.value
+        })).sort((a, b) => b.enrolled - a.enrolled);
+
+        return {
+            summary: {
+                totalLeads,
+                activePipelineCount: activeLeads.length,
+                activePipelineValue,
+                weightedPipelineValue: Math.round(weightedPipelineValue),
+                enrolledCount: enrolledLeads.length,
+                enrolledValue: enrolledLeads.reduce((sum, l) => sum + (l.course?.fee ? Number(l.course.fee) : 0), 0),
+                lostCount: lostLeads.length,
+                winRate,
+                staleLeadsCount: rawLeads.filter(l => ['new', 'contacted', 'interested', 'trial'].includes(l.status) && (!l.last_contacted || new Date(l.last_contacted) < threeDaysAgo)).length
+            },
+            stages: stageStats,
+            progressionFunnel,
+            sourcePerformance
+        };
     }
 
     /**

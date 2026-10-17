@@ -9,6 +9,7 @@ export interface SessionAttendanceDetail {
   lessonContent: string | null;
   notes: string | null;
   teacherName: string;
+  is_attendance_unlocked?: boolean;
   enrolledStudents: {
     id: number;
     name: string;
@@ -91,6 +92,7 @@ export class AttendanceRepository {
       teacherName: schedule.teacher?.full_name || 'Unknown',
       lessonContent: schedule.notes,
       notes: schedule.notes,
+      is_attendance_unlocked: schedule.is_attendance_unlocked,
       enrolledStudents,
     };
   }

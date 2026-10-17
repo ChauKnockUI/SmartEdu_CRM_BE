@@ -7,13 +7,14 @@ const router = Router();
 router.use(authenticate, authorize('admin', 'sale'));
 
 router.get('/', leadController.getLeads);
+router.get('/funnel', leadController.getLeadFunnel);
 router.get('/:id', leadController.getLeadById);
 router.get('/:id/activities', leadController.getLeadActivities);
 router.post('/:id/activities', leadController.createLeadActivity);
 router.post('/:id/convert', leadController.convertLead);
 router.post('/', leadController.createLead);
 router.put('/:id', leadController.updateLead);
-router.delete('/:id', leadController.deleteLead);
+router.delete('/:id', authorize('admin'), leadController.deleteLead);
 router.post('/:id/score', leadController.scoreLeadManually);
 
 export default router;

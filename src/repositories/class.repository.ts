@@ -147,8 +147,14 @@ export class ClassRepository {
         endTime: Date
     ) {
         const OR_conditions: Prisma.ScheduleWhereInput[] = [];
-        if (roomId) OR_conditions.push({ room_id: roomId });
-        if (teacherId) OR_conditions.push({ teacher_id: teacherId });
+        if (roomId) {
+            OR_conditions.push({ room_id: roomId });
+            OR_conditions.push({ class: { room_id: roomId } });
+        }
+        if (teacherId) {
+            OR_conditions.push({ teacher_id: teacherId });
+            OR_conditions.push({ class: { teacher_id: teacherId } });
+        }
 
         if (OR_conditions.length === 0) return null;
 
@@ -156,6 +162,7 @@ export class ClassRepository {
             where: {
                 class_id: { not: classId },
                 date,
+                status: { not: 'cancelled' },
                 OR: OR_conditions,
                 AND: [
                     { start_time: { lt: endTime } },
@@ -181,15 +188,22 @@ export class ClassRepository {
     }
 
     async checkScheduleConflict(roomId: number | null, teacherId: number | null, dates: Date[], startTime: Date, endTime: Date) {
-        const OR_conditions: any[] = [];
-        if (roomId) OR_conditions.push({ room_id: roomId });
-        if (teacherId) OR_conditions.push({ teacher_id: teacherId });
+        const OR_conditions: Prisma.ScheduleWhereInput[] = [];
+        if (roomId) {
+            OR_conditions.push({ room_id: roomId });
+            OR_conditions.push({ class: { room_id: roomId } });
+        }
+        if (teacherId) {
+            OR_conditions.push({ teacher_id: teacherId });
+            OR_conditions.push({ class: { teacher_id: teacherId } });
+        }
 
         if (OR_conditions.length === 0) return null;
 
         return await prisma.schedule.findFirst({
             where: {
                 date: { in: dates },
+                status: { not: 'cancelled' },
                 OR: OR_conditions,
                 AND: [
                     { start_time: { lt: endTime } },
@@ -204,6 +218,7 @@ export class ClassRepository {
             where: {
                 ...(excludeClassId ? { class_id: { not: excludeClassId } } : {}),
                 date: { in: dates },
+                status: { not: 'cancelled' },
                 AND: [
                     { start_time: { lt: endTime } },
                     { end_time: { gt: startTime } }
@@ -211,12 +226,22 @@ export class ClassRepository {
             },
             select: {
                 room_id: true,
-                teacher_id: true
+                teacher_id: true,
+                class: {
+                    select: {
+                        room_id: true,
+                        teacher_id: true
+                    }
+                }
             }
         });
 
-        const conflictingRooms = Array.from(new Set(conflicts.map(c => c.room_id).filter(id => id !== null) as number[]));
-        const conflictingTeachers = Array.from(new Set(conflicts.map(c => c.teacher_id).filter(id => id !== null) as number[]));
+        const conflictingRooms = Array.from(new Set(
+            conflicts.flatMap(c => [c.room_id, c.class?.room_id]).filter((id): id is number => typeof id === 'number')
+        ));
+        const conflictingTeachers = Array.from(new Set(
+            conflicts.flatMap(c => [c.teacher_id, c.class?.teacher_id]).filter((id): id is number => typeof id === 'number')
+        ));
 
         return { conflictingRooms, conflictingTeachers };
     }
