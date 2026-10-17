@@ -381,7 +381,81 @@ export class ClassService {
         }));
     }
 
-    async enrollStudents(class_id: number, student_ids: number[]) {
+    // Kiểm tra trùng lịch cho học viên trước khi xếp lớp
+    async checkStudentConflicts(class_id: number, student_ids: number[]) {
+        const targetClass = await prisma.class.findUnique({
+            where: { id: class_id },
+            include: {
+                classEnrollments: { where: { status: 'active' } },
+                schedules: { where: { date: { gte: new Date() } } }
+            }
+        });
+        if (!targetClass) {
+            const err = new Error('Không tìm thấy Lớp học');
+            (err as any).statusCode = 404;
+            throw err;
+        }
+        const studentEnrollments = await prisma.classEnrollment.findMany({
+            where: {
+                student_id: { in: student_ids },
+                status: 'active'
+            },
+            include: {
+                class: {
+                    include: {
+                        schedules: {
+                            where: { date: { gte: new Date() } }
+                        }
+                    }
+                }
+            }
+        });
+        const targetSchedules = targetClass.schedules;
+        const enrolledStudentIds = new Set(targetClass.classEnrollments.map((e: any) => e.student_id));
+        const result: Record<number, { has_conflict: boolean; is_already_enrolled: boolean; reason?: string }> = {};
+        for (const s_id of student_ids) {
+            if (enrolledStudentIds.has(s_id)) {
+                result[s_id] = {
+                    has_conflict: false,
+                    is_already_enrolled: true,
+                    reason: 'Đã có trong lớp học này'
+                };
+                continue;
+            }
+            const myEnrollments = studentEnrollments.filter((e: any) => e.student_id === s_id);
+            let hasConflict = false;
+            let conflictReason = '';
+            for (const enrollment of myEnrollments) {
+                if (hasConflict) break;
+                // Bỏ qua nếu chính là lớp hiện tại
+                if (enrollment.class_id === class_id) continue;
+                const existingSchedules = enrollment.class.schedules;
+                for (const newSch of targetSchedules) {
+                    if (hasConflict) break;
+                    if (!newSch.start_time || !newSch.end_time) continue;
+                    for (const exSch of existingSchedules) {
+                        if (!exSch.start_time || !exSch.end_time) continue;
+                        const dateA = new Date(newSch.date).toISOString().slice(0, 10);
+                        const dateB = new Date(exSch.date).toISOString().slice(0, 10);
+                        if (dateA === dateB) {
+                            if (newSch.start_time < exSch.end_time && newSch.end_time > exSch.start_time) {
+                                hasConflict = true;
+                                conflictReason = `Trùng với ${enrollment.class.name} (${dateA})`;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            result[s_id] = {
+                has_conflict: hasConflict,
+                is_already_enrolled: false,
+                reason: hasConflict ? conflictReason : undefined
+            };
+        }
+        return result;
+    }
+    async enrollStudents(class_id: number, student_ids: number[], allow_conflicts: boolean = false) {
         // 1. Lấy thông tin lớp học, sĩ số và lịch học
         const targetClass = await prisma.class.findUnique({
             where: { id: class_id },
@@ -451,8 +525,10 @@ export class ClassService {
                         if (!exSch.start_time || !exSch.end_time) continue;
 
                         // So sánh ngày
-                        if (newSch.date.getTime() === exSch.date.getTime()) {
-                            // So sánh giờ: (StartA < EndB) && (EndA > StartB)
+                        const dateA = new Date(newSch.date).toISOString().slice(0, 10);
+                        const dateB = new Date(exSch.date).toISOString().slice(0, 10);
+                        if (dateA === dateB) {
+                            // So sánh giờ
                             if (newSch.start_time < exSch.end_time && newSch.end_time > exSch.start_time) {
                                 const dateStr = newSch.date.toISOString().split('T')[0];
                                 failed.push({ student_id: s_id, reason: `Trùng lịch lớp ${enrollment.class.name} ngày ${dateStr}` });
@@ -464,7 +540,7 @@ export class ClassService {
                 }
             }
 
-            if (!hasConflict) {
+            if (!hasConflict || allow_conflicts) {
                 successful_ids.push(s_id);
             }
         }

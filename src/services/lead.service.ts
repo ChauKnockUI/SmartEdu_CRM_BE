@@ -300,7 +300,7 @@ export class LeadService {
                 contacted: 'Đã liên hệ',
                 interested: 'Quan tâm',
                 trial: 'Học thử',
-                enrolled: 'Đã đăng ký (Won)',
+                enrolled: 'Đã đăng ký',
                 lost: 'Thất bại (Lost)'
             };
             const oldLabel = statusLabelsMap[oldStatus] || oldStatus;

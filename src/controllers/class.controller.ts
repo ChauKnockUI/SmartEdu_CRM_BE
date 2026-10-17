@@ -222,20 +222,45 @@ export class ClassController {
         }
     }
 
-    async enrollStudent(req: Request, res: Response) {
+    async checkStudentConflicts(req: Request, res: Response) {
         try {
             const class_id = parseInt(req.params.id);
             const { student_ids } = req.body;
+            if (isNaN(class_id) || !Array.isArray(student_ids)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'ID lớp học hoặc danh sách student_ids không hợp lệ'
+                });
+            }
+            const conflicts = await classService.checkStudentConflicts(class_id, student_ids.map(Number));
+            return res.status(200).json({
+                success: true,
+                data: conflicts
+            });
+        } catch (error: any) {
+            console.error('[ClassController] checkStudentConflicts error:', error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || 'Lỗi khi kiểm tra xung đột lịch học'
+            });
+        }
+    }
 
+    async enrollStudent(req: Request, res: Response) {
+        try {
+            const class_id = parseInt(req.params.id);
+            const { student_ids, allow_conflicts } = req.body;
             if (isNaN(class_id) || !Array.isArray(student_ids) || student_ids.length === 0) {
                 return res.status(400).json({
                     success: false,
                     message: 'ID lớp học không hợp lệ hoặc danh sách student_ids trống'
                 });
             }
-
-            const result = await classService.enrollStudents(class_id, student_ids.map(Number));
-
+            const result = await classService.enrollStudents(
+                class_id,
+                student_ids.map(Number),
+                Boolean(allow_conflicts)
+            );
             return res.status(201).json({
                 success: true,
                 message: 'Đã xử lý danh sách ghi danh',
