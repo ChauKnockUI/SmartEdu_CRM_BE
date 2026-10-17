@@ -23,13 +23,15 @@ export class LeadController {
                 sort_dir
             } = req.query;
 
+            const isSale = req.user?.role === 'sale';
+            const currentUserId = req.user?.userId;
             // Typecasting & Calling Service
             const result = await leadService.getLeads({
                 page: page ? parseInt(page as string, 10) : 1,
                 limit: limit ? parseInt(limit as string, 10) : 10,
                 status: status as LeadStatus,
                 source: source as string,
-                assigned_to: assigned_to ? parseInt(assigned_to as string, 10) : undefined,
+                assigned_to: isSale ? currentUserId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
                 date_from: date_from as string,
                 date_to: date_to as string,
                 search: search as string,
@@ -43,10 +45,10 @@ export class LeadController {
                 data: result.data,
                 pagination: result.pagination
             });
-            
+
         } catch (error: any) {
             console.error('[LeadController] getLeads error:', error);
-            
+
             return res.status(500).json({
                 success: false,
                 message: 'Lỗi Internal Server khi lấy danh sách Leads',
@@ -71,19 +73,23 @@ export class LeadController {
             }
 
             const result = await leadService.getLeadById(Number(id));
-
             if (!result) {
                 return res.status(404).json({
                     success: false,
                     message: 'Không tìm thấy thông tin Lead (Not found)'
                 });
             }
-
+            if (req.user?.role === 'sale' && result.assigned_to !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền truy cập thông tin của khách hàng này'
+                });
+            }
             return res.status(200).json({
                 success: true,
-                data: result // Đồng nhất chuẩn JSON response với GET /api/leads
+                data: result
             });
-            
+
         } catch (error: any) {
             console.error('[LeadController] getLeadById error:', error);
 
@@ -110,6 +116,19 @@ export class LeadController {
                     message: 'ID của Lead không hợp lệ'
                 });
             }
+            const lead = await leadService.getLeadById(Number(id));
+            if (!lead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead (Not found)'
+                });
+            }
+            if (req.user?.role === 'sale' && lead.assigned_to !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền xem lịch sử tương tác của lead này'
+                });
+            }
 
             const result = await leadService.getLeadActivities(Number(id), {
                 page: page ? parseInt(page as string, 10) : 1,
@@ -128,7 +147,7 @@ export class LeadController {
                 data: result.data,
                 pagination: result.pagination
             });
-            
+
         } catch (error: any) {
             console.error('[LeadController] getLeadActivities error:', error);
 
@@ -158,6 +177,21 @@ export class LeadController {
                 });
             }
 
+            // Kiểm tra lead tồn tại và quyền ghi nhận của Sale
+            const lead = await leadService.getLeadById(Number(id));
+            if (!lead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy Lead để ghi nhận Activity (Not found)'
+                });
+            }
+            if (req.user?.role === 'sale' && lead.assigned_to !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không thể ghi nhận tương tác cho lead của sale khác'
+                });
+            }
+
             // Validate type bắt buộc & thuộc enum cho phép
             const allowedTypes: LeadActivityType[] = ['call', 'email', 'sms', 'meeting', 'note', 'status_change'];
             if (!type || !allowedTypes.includes(type as LeadActivityType)) {
@@ -173,13 +207,6 @@ export class LeadController {
                 engagement_status,
                 user_id: req.user?.userId,
             });
-
-            if (!activity) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Không tìm thấy Lead để ghi nhận Activity (Not found)'
-                });
-            }
 
             return res.status(201).json({
                 success: true,
@@ -287,12 +314,30 @@ export class LeadController {
                 });
             }
 
+            // Kiểm tra lead tồn tại và quyền chỉnh sửa của Sale
+            const lead = await leadService.getLeadById(Number(id));
+            if (!lead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead để cập nhật (Not found)'
+                });
+            }
+
+            const isSale = req.user?.role === 'sale';
+            if (isSale && lead.assigned_to !== req.user?.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền chỉnh sửa lead của sale khác'
+                });
+            }
+
             // Chỉ destructure những field được phép update theo y/c
             const { status, assigned_to, notes, occupation, study_purpose, source, course_id, lost_reason } = req.body;
 
             const updatedLead = await leadService.updateLead(Number(id), {
                 status,
-                assigned_to,
+                // Sale không được tự đổi assigned_to, chỉ Admin mới được điều chuyển
+                assigned_to: isSale ? undefined : assigned_to,
                 notes,
                 occupation,
                 study_purpose,
@@ -300,13 +345,6 @@ export class LeadController {
                 course_id,
                 lost_reason
             }, req.user?.userId);
-
-            if (!updatedLead) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Không tìm thấy thông tin Lead để cập nhật (Not found)'
-                });
-            }
 
             return res.status(200).json({
                 success: true,
@@ -328,8 +366,9 @@ export class LeadController {
     async getLeadFunnel(req: Request, res: Response) {
         try {
             const { assigned_to, source, course_id, date_from, date_to } = req.query;
+            const isSale = req.user?.role === 'sale';
             const funnel = await leadService.getLeadFunnel({
-                assigned_to: assigned_to ? parseInt(assigned_to as string, 10) : undefined,
+                assigned_to: isSale ? req.user?.userId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
                 source: source as string,
                 course_id: course_id ? parseInt(course_id as string, 10) : undefined,
                 date_from: date_from as string,
@@ -358,7 +397,7 @@ export class LeadController {
     async deleteLead(req: Request, res: Response) {
         try {
             const { id } = req.params;
-            
+
             // Simulating Role extraction from HTTP Header (vì chưa có Middleware Auth đầy đủ)
             // Header VD trong Postman/Apidog: 'x-role': 'admin' hoặc 'sale'
             //const userRole = req.header('x-role');
@@ -394,7 +433,7 @@ export class LeadController {
             });
         } catch (error: any) {
             console.error('[LeadController] deleteLead error:', error);
-            
+
             // Fallback Foreign Key Exception: Nếu Lead đã join vào bảng Học Viên (Student)
             // thì Prisma sẽ quăng lỗi chặn xoá do vi phạm khóa ngoại.
             if (error.code === 'P2003') {
@@ -424,6 +463,21 @@ export class LeadController {
                 return res.status(400).json({
                     success: false,
                     message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Kiểm tra quyền chấm điểm của Sale
+            const lead = await leadService.getLeadById(Number(id));
+            if (!lead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy thông tin Lead (Not found)'
+                });
+            }
+            if (req.user?.role === 'sale' && lead.assigned_to !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền chấm điểm lead của sale khác'
                 });
             }
 
@@ -468,6 +522,21 @@ export class LeadController {
                 return res.status(400).json({
                     success: false,
                     message: 'ID của Lead không hợp lệ'
+                });
+            }
+
+            // Kiểm tra quyền convert của Sale
+            const lead = await leadService.getLeadById(Number(id));
+            if (!lead) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Không tìm thấy Lead để chuyển đổi (Not found)'
+                });
+            }
+            if (req.user?.role === 'sale' && lead.assigned_to !== req.user.userId) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Bạn không có quyền chuyển đổi lead của sale khác'
                 });
             }
 

@@ -14,7 +14,7 @@ router.post('/:id/activities', leadController.createLeadActivity);
 router.post('/:id/convert', leadController.convertLead);
 router.post('/', leadController.createLead);
 router.put('/:id', leadController.updateLead);
-router.delete('/:id', leadController.deleteLead);
+router.delete('/:id', authorize('admin'), leadController.deleteLead);
 router.post('/:id/score', leadController.scoreLeadManually);
 
 export default router;
