@@ -10,51 +10,57 @@ datasource db {
 }
 
 model User {
-  id               Int                  @id @default(autoincrement())
-  email            String               @unique @db.VarChar(255)
-  password_hash    String               @db.VarChar(255)
-  full_name        String               @db.VarChar(255)
-  phone            String?              @db.VarChar(20)
-  role             UserRole             @default(sale)
-  avatar_url       String?              @db.VarChar(500)
-  is_active        Boolean              @default(true)
-  createdAt        DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime             @updatedAt @db.Timestamptz(6)
-  class_materials  class_materials[]
-  leadActivities   LeadActivity[]
-  assignedLeads    Lead[]               @relation("LeadAssignee")
-  receivedPayments PaymentTransaction[] @relation("PaymentReceiver")
-  createdPayments  Payment[]            @relation("PaymentCreator")
-  issuedReceipts   Receipt[]            @relation("ReceiptIssuer")
-  assignmentsCreated Assignment[]        @relation("AssignmentCreator")
-  student          Student?
-  teacher          Teacher?
-  notifications    Notification[]
+  id                 Int                  @id @default(autoincrement())
+  tenant_id          Int                  @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant             Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  email              String               @db.VarChar(255)
+  password_hash      String               @db.VarChar(255)
+  full_name          String               @db.VarChar(255)
+  phone              String?              @db.VarChar(20)
+  role               UserRole             @default(sale)
+  avatar_url         String?              @db.VarChar(500)
+  is_active          Boolean              @default(true)
+  createdAt          DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime             @updatedAt @db.Timestamptz(6)
+  class_materials    class_materials[]
+  leadActivities     LeadActivity[]
+  assignedLeads      Lead[]               @relation("LeadAssignee")
+  receivedPayments   PaymentTransaction[] @relation("PaymentReceiver")
+  createdPayments    Payment[]            @relation("PaymentCreator")
+  issuedReceipts     Receipt[]            @relation("ReceiptIssuer")
+  assignmentsCreated Assignment[]         @relation("AssignmentCreator")
+  student            Student?
+  teacher            Teacher?
+  notifications      Notification[]
 
-  @@index([role])
-  @@index([is_active])
+  @@unique([tenant_id, email])
+  @@index([tenant_id, role])
   @@map("users")
 }
 
 model Notification {
-  id          Int                  @id @default(autoincrement())
-  user_id     Int
-  type        NotificationType     @default(general)
-  title       String               @db.VarChar(255)
-  message     String               @db.Text
-  link        String?              @db.VarChar(500)
-  is_read     Boolean              @default(false)
-  metadata    Json?
-  createdAt   DateTime             @default(now()) @db.Timestamptz(6)
-  user        User                 @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  id        Int              @id @default(autoincrement())
+  tenant_id Int              @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant    Tenant           @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  user_id   Int
+  type      NotificationType @default(general)
+  title     String           @db.VarChar(255)
+  message   String           @db.Text
+  link      String?          @db.VarChar(500)
+  is_read   Boolean          @default(false)
+  metadata  Json?
+  createdAt DateTime         @default(now()) @db.Timestamptz(6)
+  user      User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
-  @@index([user_id, is_read])
-  @@index([createdAt(sort: Desc)])
+  @@index([tenant_id, user_id, is_read])
+  @@index([tenant_id, createdAt(sort: Desc)])
   @@map("notifications")
 }
 
 model Lead {
   id             Int            @id @default(autoincrement())
+  tenant_id      Int            @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant         Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   full_name      String         @db.VarChar(255)
   phone          String?        @db.VarChar(20)
   email          String?        @db.VarChar(255)
@@ -74,16 +80,19 @@ model Lead {
   course         Course?        @relation("LeadCourseInterested", fields: [course_id], references: [id])
   student        Student?
 
-  @@index([status])
-  @@index([lead_source])
-  @@index([course_id])
-  @@index([assigned_to])
-  @@index([createdAt])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, status, createdAt(sort: Desc)])
+  @@index([tenant_id, assigned_to, status])
+  @@index([tenant_id, course_id])
+  @@index([tenant_id, lead_source])
+  @@index([tenant_id, createdAt])
   @@map("leads")
 }
 
 model LeadActivity {
   id                Int              @id @default(autoincrement())
+  tenant_id         Int              @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant            Tenant           @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   lead_id           Int
   user_id           Int?
   type              LeadActivityType
@@ -91,51 +100,57 @@ model LeadActivity {
   createdAt         DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime         @updatedAt @db.Timestamptz(6)
   engagement_status String?          @db.VarChar(255)
-  lead              Lead             @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  lead              Lead             @relation(fields: [tenant_id, lead_id], references: [tenant_id, id], onDelete: Cascade)
   user              User?            @relation(fields: [user_id], references: [id])
 
-  @@index([lead_id, type])
-  @@index([lead_id, createdAt])
-  @@index([user_id])
+  @@index([tenant_id, lead_id, type])
+  @@index([tenant_id, lead_id, createdAt])
+  @@index([tenant_id, user_id])
   @@map("lead_activities")
 }
 
 model Student {
-  id                 Int               @id @default(autoincrement())
-  user_id            Int?              @unique
-  lead_id            Int?              @unique
-  full_name          String            @db.VarChar(255)
-  phone              String?           @db.VarChar(20)
-  email              String?           @unique @db.VarChar(255)
-  dob                DateTime?         @db.Date
-  status             StudentStatus     @default(active)
-  enrollment_date    DateTime?         @db.Date
-  dropout_risk       Float?
-  dropout_risk_level DropoutRiskLevel?
-  dropout_risk_reasons Json?
-  dropout_risk_updated_at DateTime? @db.Timestamptz(6)
-  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt          DateTime          @updatedAt @db.Timestamptz(6)
-  attendances        Attendance[]
-  assignmentSubmissions AssignmentSubmission[]
-  classEnrollments   ClassEnrollment[]
-  invoices           Invoice[]
-  payments           Payment[]
-  lead               Lead?             @relation(fields: [lead_id], references: [id])
-  user               User?             @relation(fields: [user_id], references: [id])
-  testResults        TestResult[]
+  id                      Int                    @id @default(autoincrement())
+  tenant_id               Int                    @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant                  Tenant                 @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  user_id                 Int?                   @unique
+  lead_id                 Int?                   @unique
+  full_name               String                 @db.VarChar(255)
+  phone                   String?                @db.VarChar(20)
+  email                   String?                @db.VarChar(255)
+  dob                     DateTime?              @db.Date
+  status                  StudentStatus          @default(active)
+  enrollment_date         DateTime?              @db.Date
+  dropout_risk            Float?
+  dropout_risk_level      DropoutRiskLevel?
+  dropout_risk_reasons    Json?
+  dropout_risk_updated_at DateTime?              @db.Timestamptz(6)
+  createdAt               DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt               DateTime               @updatedAt @db.Timestamptz(6)
+  attendances             Attendance[]
+  assignmentSubmissions   AssignmentSubmission[]
+  classEnrollments        ClassEnrollment[]
+  invoices                Invoice[]
+  payments                Payment[]
+  lead                    Lead?                  @relation(fields: [lead_id], references: [id])
+  user                    User?                  @relation(fields: [user_id], references: [id])
+  testResults             TestResult[]
 
-  @@index([status])
-  @@index([enrollment_date])
+  @@unique([tenant_id, email])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, status])
+  @@index([tenant_id, enrollment_date])
   @@map("students")
 }
 
 model Teacher {
   id             Int         @id @default(autoincrement())
+  tenant_id      Int         @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant         Tenant      @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   user_id        Int?        @unique
   full_name      String      @db.VarChar(255)
   phone          String?     @db.VarChar(20)
-  email          String?     @unique @db.VarChar(255)
+  email          String?     @db.VarChar(255)
   type           TeacherType @default(full_time)
   specialization String?     @db.VarChar(255)
   is_active      Boolean     @default(true)
@@ -145,12 +160,15 @@ model Teacher {
   schedules      Schedule[]
   user           User?       @relation(fields: [user_id], references: [id])
 
-  @@index([is_active])
+  @@unique([tenant_id, email])
+  @@index([tenant_id, is_active])
   @@map("teachers")
 }
 
 model Course {
   id             Int       @id @default(autoincrement())
+  tenant_id      Int       @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant         Tenant    @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   name           String    @db.VarChar(255)
   description    String?
   total_sessions Int?
@@ -163,11 +181,14 @@ model Course {
   feePlans       FeePlan[]
   leads          Lead[]    @relation("LeadCourseInterested")
 
+  @@index([tenant_id, is_active])
   @@map("courses")
 }
 
 model Class {
   id               Int               @id @default(autoincrement())
+  tenant_id        Int               @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant           Tenant            @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   name             String            @db.VarChar(255)
   course_id        Int?
   teacher_id       Int?
@@ -193,16 +214,19 @@ model Class {
   tests            Test[]
   assignments      Assignment[]
 
-  @@index([status])
-  @@index([course_id])
-  @@index([fee_plan_id])
-  @@index([teacher_id])
-  @@index([room_id])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, status])
+  @@index([tenant_id, course_id])
+  @@index([tenant_id, fee_plan_id])
+  @@index([tenant_id, teacher_id])
+  @@index([tenant_id, room_id])
   @@map("classes")
 }
 
 model FeePlan {
   id          Int           @id @default(autoincrement())
+  tenant_id   Int           @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   course_id   Int?
   name        String        @db.VarChar(255)
   description String?
@@ -214,13 +238,16 @@ model FeePlan {
   items       FeePlanItem[]
   course      Course?       @relation(fields: [course_id], references: [id])
 
-  @@index([course_id])
-  @@index([is_active])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, course_id])
+  @@index([tenant_id, is_active])
   @@map("fee_plans")
 }
 
 model FeePlanItem {
   id          Int             @id @default(autoincrement())
+  tenant_id   Int             @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   fee_plan_id Int
   type        InvoiceItemType @default(tuition)
   description String          @db.VarChar(255)
@@ -228,30 +255,35 @@ model FeePlanItem {
   sort_order  Int             @default(0)
   createdAt   DateTime        @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
-  feePlan     FeePlan         @relation(fields: [fee_plan_id], references: [id], onDelete: Cascade)
+  feePlan     FeePlan         @relation(fields: [tenant_id, fee_plan_id], references: [tenant_id, id], onDelete: Cascade)
 
-  @@index([fee_plan_id])
+  @@index([tenant_id, fee_plan_id])
   @@map("fee_plan_items")
 }
 
 model ClassEnrollment {
   id         Int              @id @default(autoincrement())
+  tenant_id  Int              @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant     Tenant           @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   class_id   Int
   student_id Int
   status     EnrollmentStatus @default(active)
   createdAt  DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime         @updatedAt @db.Timestamptz(6)
-  class      Class            @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  student    Student          @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  class      Class            @relation(fields: [tenant_id, class_id], references: [tenant_id, id], onDelete: Cascade)
+  student    Student          @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
 
   @@unique([class_id, student_id])
-  @@index([student_id])
+  @@index([tenant_id, class_id, status])
+  @@index([tenant_id, student_id])
   @@map("class_enrollments")
 }
 
 model Room {
   id        Int        @id @default(autoincrement())
-  name      String     @unique @db.VarChar(255)
+  tenant_id Int        @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant    Tenant     @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  name      String     @db.VarChar(255)
   capacity  Int?
   equipment String?
   is_active Boolean    @default(true)
@@ -260,54 +292,62 @@ model Room {
   classes   Class[]
   schedules Schedule[]
 
+  @@unique([tenant_id, name])
   @@map("rooms")
 }
 
 model Schedule {
-  id          Int            @id @default(autoincrement())
-  class_id    Int?
-  teacher_id  Int?
-  room_id     Int?
-  date        DateTime       @db.Date
-  start_time  DateTime?      @db.Time(6)
-  end_time    DateTime?      @db.Time(6)
-  status      ScheduleStatus @default(scheduled)
-  createdAt   DateTime       @default(now()) @db.Timestamptz(6)
-  updatedAt   DateTime       @updatedAt @db.Timestamptz(6)
-  notes       String?
-  memo        String?
-  attendances Attendance[]
-  class       Class?         @relation(fields: [class_id], references: [id], onDelete: Cascade)
-  room        Room?          @relation(fields: [room_id], references: [id])
-  teacher     Teacher?       @relation(fields: [teacher_id], references: [id])
-  is_attendance_unlocked Boolean @default(false)
+  id                     Int            @id @default(autoincrement())
+  tenant_id              Int            @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant                 Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  class_id               Int?
+  teacher_id             Int?
+  room_id                Int?
+  date                   DateTime       @db.Date
+  start_time             DateTime?      @db.Time(6)
+  end_time               DateTime?      @db.Time(6)
+  status                 ScheduleStatus @default(scheduled)
+  createdAt              DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime       @updatedAt @db.Timestamptz(6)
+  notes                  String?
+  memo                   String?
+  attendances            Attendance[]
+  class                  Class?         @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  room                   Room?          @relation(fields: [room_id], references: [id])
+  teacher                Teacher?       @relation(fields: [teacher_id], references: [id])
+  is_attendance_unlocked Boolean        @default(false)
   attendance_unlocked_at DateTime?
 
-  @@index([date])
-  @@index([class_id])
-  @@index([teacher_id])
-  @@index([room_id])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, date])
+  @@index([tenant_id, class_id, date])
+  @@index([tenant_id, teacher_id, date])
+  @@index([tenant_id, room_id, date])
   @@map("schedules")
 }
 
 model Attendance {
   id          Int              @id @default(autoincrement())
+  tenant_id   Int              @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant           @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   schedule_id Int
   student_id  Int
   status      AttendanceStatus @default(present)
   notes       String?
   createdAt   DateTime         @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime         @updatedAt @db.Timestamptz(6)
-  schedule    Schedule         @relation(fields: [schedule_id], references: [id], onDelete: Cascade)
-  student     Student          @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  schedule    Schedule         @relation(fields: [tenant_id, schedule_id], references: [tenant_id, id], onDelete: Cascade)
+  student     Student          @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
 
   @@unique([schedule_id, student_id])
-  @@index([student_id])
+  @@index([tenant_id, student_id])
   @@map("attendances")
 }
 
 model Test {
   id          Int          @id @default(autoincrement())
+  tenant_id   Int          @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant       @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   class_id    Int
   name        String       @db.VarChar(255)
   type        TestType
@@ -316,31 +356,36 @@ model Test {
   createdAt   DateTime     @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime     @updatedAt @db.Timestamptz(6)
   testResults TestResult[]
-  class       Class        @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  class       Class        @relation(fields: [tenant_id, class_id], references: [tenant_id, id], onDelete: Cascade)
 
-  @@index([class_id])
-  @@index([test_date])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, class_id])
+  @@index([tenant_id, test_date])
   @@map("tests")
 }
 
 model TestResult {
   id         Int      @id @default(autoincrement())
+  tenant_id  Int      @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant     Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   test_id    Int
   student_id Int
   score      Float?
   feedback   String?
   createdAt  DateTime @default(now()) @db.Timestamptz(6)
   updatedAt  DateTime @updatedAt @db.Timestamptz(6)
-  student    Student  @relation(fields: [student_id], references: [id], onDelete: Cascade)
-  test       Test     @relation(fields: [test_id], references: [id], onDelete: Cascade)
+  student    Student  @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
+  test       Test     @relation(fields: [tenant_id, test_id], references: [tenant_id, id], onDelete: Cascade)
 
   @@unique([test_id, student_id])
-  @@index([student_id])
+  @@index([tenant_id, student_id])
   @@map("test_results")
 }
 
 model Assignment {
   id          Int                    @id @default(autoincrement())
+  tenant_id   Int                    @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant                 @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   class_id    Int
   title       String                 @db.VarChar(255)
   description String?
@@ -349,18 +394,21 @@ model Assignment {
   created_by  Int?
   createdAt   DateTime               @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime               @updatedAt @db.Timestamptz(6)
-  class       Class                  @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  class       Class                  @relation(fields: [tenant_id, class_id], references: [tenant_id, id], onDelete: Cascade)
   creator     User?                  @relation("AssignmentCreator", fields: [created_by], references: [id])
   submissions AssignmentSubmission[]
 
-  @@index([class_id])
-  @@index([due_date])
-  @@index([created_by])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, class_id])
+  @@index([tenant_id, due_date])
+  @@index([tenant_id, created_by])
   @@map("assignments")
 }
 
 model AssignmentSubmission {
   id            Int                        @id @default(autoincrement())
+  tenant_id     Int                        @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant        Tenant                     @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   assignment_id Int
   student_id    Int
   submitted_at  DateTime?                  @db.Timestamptz(6)
@@ -369,17 +417,19 @@ model AssignmentSubmission {
   feedback      String?
   createdAt     DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt     DateTime                   @updatedAt @db.Timestamptz(6)
-  assignment    Assignment                 @relation(fields: [assignment_id], references: [id], onDelete: Cascade)
-  student       Student                    @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  assignment    Assignment                 @relation(fields: [tenant_id, assignment_id], references: [tenant_id, id], onDelete: Cascade)
+  student       Student                    @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
 
   @@unique([assignment_id, student_id])
-  @@index([student_id])
-  @@index([status])
+  @@index([tenant_id, student_id])
+  @@index([tenant_id, status])
   @@map("assignment_submissions")
 }
 
 model Payment {
   id           Int           @id @default(autoincrement())
+  tenant_id    Int           @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant       Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   student_id   Int
   class_id     Int?
   amount       Decimal       @db.Decimal(15, 2)
@@ -392,18 +442,20 @@ model Payment {
   updatedAt    DateTime      @updatedAt @db.Timestamptz(6)
   class        Class?        @relation(fields: [class_id], references: [id])
   creator      User?         @relation("PaymentCreator", fields: [created_by], references: [id])
-  student      Student       @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  student      Student       @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
 
-  @@index([student_id])
-  @@index([class_id])
-  @@index([status])
-  @@index([payment_date])
+  @@index([tenant_id, student_id])
+  @@index([tenant_id, class_id])
+  @@index([tenant_id, status])
+  @@index([tenant_id, payment_date])
   @@map("payments")
 }
 
 model Invoice {
   id              Int                  @id @default(autoincrement())
-  invoice_no      String               @unique @db.VarChar(50)
+  tenant_id       Int                  @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant          Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  invoice_no      String               @db.VarChar(50)
   student_id      Int
   class_id        Int?
   total_amount    Decimal              @db.Decimal(15, 2)
@@ -415,33 +467,38 @@ model Invoice {
   updatedAt       DateTime             @updatedAt @db.Timestamptz(6)
   items           InvoiceItem[]
   class           Class?               @relation(fields: [class_id], references: [id])
-  student         Student              @relation(fields: [student_id], references: [id], onDelete: Cascade)
+  student         Student              @relation(fields: [tenant_id, student_id], references: [tenant_id, id], onDelete: Cascade)
   payments        PaymentTransaction[]
   receipts        Receipt[]
 
-  @@index([student_id])
-  @@index([class_id])
-  @@index([status])
-  @@index([due_date])
+  @@unique([tenant_id, invoice_no])
+  @@unique([tenant_id, id])
+  @@index([tenant_id, student_id, status])
+  @@index([tenant_id, class_id])
+  @@index([tenant_id, status, due_date])
   @@map("invoices")
 }
 
 model InvoiceItem {
   id          Int             @id @default(autoincrement())
+  tenant_id   Int             @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant          @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   invoice_id  Int
   type        InvoiceItemType @default(tuition)
   description String          @db.VarChar(255)
   amount      Decimal         @db.Decimal(15, 2)
   createdAt   DateTime        @default(now()) @db.Timestamptz(6)
   updatedAt   DateTime        @updatedAt @db.Timestamptz(6)
-  invoice     Invoice         @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  invoice     Invoice         @relation(fields: [tenant_id, invoice_id], references: [tenant_id, id], onDelete: Cascade)
 
-  @@index([invoice_id])
+  @@index([tenant_id, invoice_id])
   @@map("invoice_items")
 }
 
 model PaymentTransaction {
   id             Int           @id @default(autoincrement())
+  tenant_id      Int           @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant         Tenant        @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   invoice_id     Int
   amount         Decimal       @db.Decimal(15, 2)
   method         PaymentMethod @default(cash)
@@ -451,19 +508,21 @@ model PaymentTransaction {
   notes          String?
   createdAt      DateTime      @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
-  invoice        Invoice       @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  invoice        Invoice       @relation(fields: [tenant_id, invoice_id], references: [tenant_id, id], onDelete: Cascade)
   receiver       User?         @relation("PaymentReceiver", fields: [received_by], references: [id])
   receipts       Receipt[]
 
-  @@index([invoice_id])
-  @@index([paid_at])
-  @@index([received_by])
+  @@index([tenant_id, invoice_id])
+  @@index([tenant_id, paid_at])
+  @@index([tenant_id, received_by])
   @@map("payment_transactions")
 }
 
 model Receipt {
   id             Int                 @id @default(autoincrement())
-  receipt_no     String              @unique @db.VarChar(50)
+  tenant_id      Int                 @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant         Tenant              @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
+  receipt_no     String              @db.VarChar(50)
   invoice_id     Int
   transaction_id Int?
   issued_at      DateTime            @default(now()) @db.Timestamptz(6)
@@ -471,13 +530,14 @@ model Receipt {
   notes          String?
   createdAt      DateTime            @default(now()) @db.Timestamptz(6)
   updatedAt      DateTime            @updatedAt @db.Timestamptz(6)
-  invoice        Invoice             @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  invoice        Invoice             @relation(fields: [tenant_id, invoice_id], references: [tenant_id, id], onDelete: Cascade)
   issuer         User?               @relation("ReceiptIssuer", fields: [issued_by], references: [id])
   transaction    PaymentTransaction? @relation(fields: [transaction_id], references: [id])
 
-  @@index([invoice_id])
-  @@index([transaction_id])
-  @@index([issued_at])
+  @@unique([tenant_id, receipt_no])
+  @@index([tenant_id, invoice_id])
+  @@index([tenant_id, transaction_id])
+  @@index([tenant_id, issued_at])
   @@map("receipts")
 }
 
@@ -486,6 +546,8 @@ model Receipt {
 /// AIPrediction acts as an append-only historical log for Model Monitoring and Calibration.
 model AIPrediction {
   id              Int            @id @default(autoincrement())
+  tenant_id       Int            @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant          Tenant         @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   prediction_type PredictionType
   reference_id    Int?
   input_data      Json?
@@ -493,13 +555,15 @@ model AIPrediction {
   createdAt       DateTime       @default(now()) @db.Timestamptz(6)
   updatedAt       DateTime       @updatedAt @db.Timestamptz(6)
 
-  @@index([prediction_type])
-  @@index([reference_id])
+  @@index([tenant_id, prediction_type, createdAt])
+  @@index([tenant_id, reference_id])
   @@map("ai_predictions")
 }
 
 model LeadAiScore {
   id                Int                  @id @default(autoincrement())
+  tenant_id         Int                  @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant            Tenant               @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   lead_id           Int                  @unique
   probability_score Float
   recommendation    LeadAiRecommendation
@@ -507,14 +571,17 @@ model LeadAiScore {
   negative_factors  Json?
   scored_at         DateTime             @default(now()) @db.Timestamptz(6)
   updatedAt         DateTime             @updatedAt @db.Timestamptz(6)
-  lead              Lead                 @relation(fields: [lead_id], references: [id], onDelete: Cascade)
+  lead              Lead                 @relation(fields: [tenant_id, lead_id], references: [tenant_id, id], onDelete: Cascade)
 
-  @@index([probability_score(sort: Desc)])
+  @@unique([tenant_id, lead_id])
+  @@index([tenant_id, probability_score(sort: Desc)])
   @@map("lead_ai_scores")
 }
 
 model class_materials {
   id          Int      @id @default(autoincrement())
+  tenant_id   Int      @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  tenant      Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Restrict)
   class_id    Int
   title       String
   file_name   String
@@ -522,10 +589,13 @@ model class_materials {
   file_type   String?
   file_size   Int?
   uploaded_by Int
-  created_at  DateTime @default(now())
-  updated_at  DateTime @default(now())
-  classes     Class    @relation(fields: [class_id], references: [id], onDelete: Cascade)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  classes     Class    @relation(fields: [tenant_id, class_id], references: [tenant_id, id], onDelete: Cascade)
   users       User     @relation(fields: [uploaded_by], references: [id])
+
+  @@index([tenant_id, class_id])
+  @@index([tenant_id, uploaded_by])
 }
 
 enum UserRole {
@@ -659,4 +729,111 @@ enum NotificationType {
   attendance_reminder
   overdue_attendance
   system_alert
+}
+
+enum TenantStatus {
+  trial
+  active
+  suspended
+  closed
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  cancelled
+  expired
+}
+
+model SubscriptionPlan {
+  id            Int                  @id @default(autoincrement())
+  code          String               @unique @db.VarChar(50)
+  name          String               @db.VarChar(255)
+  price_monthly Decimal              @default(0) @db.Decimal(15, 2)
+  max_students  Int?
+  max_users     Int?
+  features      Json?
+  is_active     Boolean              @default(true)
+  createdAt     DateTime             @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime             @updatedAt @db.Timestamptz(6)
+  tenants       Tenant[]
+  subscriptions TenantSubscription[]
+
+  @@map("subscription_plans")
+}
+
+model Tenant {
+  id                    Int                    @id @default(autoincrement())
+  name                  String                 @db.VarChar(255)
+  subdomain             String                 @unique @db.VarChar(63)
+  status                TenantStatus           @default(trial)
+  plan_id               Int?
+  contact_email         String?                @db.VarChar(255)
+  contact_phone         String?                @db.VarChar(20)
+  trial_ends_at         DateTime?              @db.Timestamptz(6)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime               @updatedAt @db.Timestamptz(6)
+  plan                  SubscriptionPlan?      @relation(fields: [plan_id], references: [id])
+  subscriptions         TenantSubscription[]
+  users                 User[]
+  leads                 Lead[]
+  leadActivitys         LeadActivity[]
+  students              Student[]
+  teachers              Teacher[]
+  courses               Course[]
+  classs                Class[]
+  feePlans              FeePlan[]
+  feePlanItems          FeePlanItem[]
+  classEnrollments      ClassEnrollment[]
+  rooms                 Room[]
+  schedules             Schedule[]
+  attendances           Attendance[]
+  tests                 Test[]
+  testResults           TestResult[]
+  assignments           Assignment[]
+  assignmentSubmissions AssignmentSubmission[]
+  payments              Payment[]
+  invoices              Invoice[]
+  invoiceItems          InvoiceItem[]
+  paymentTransactions   PaymentTransaction[]
+  receipts              Receipt[]
+  aIPredictions         AIPrediction[]
+  leadAiScores          LeadAiScore[]
+  class_materials       class_materials[]
+  notifications         Notification[]
+
+  @@index([plan_id])
+  @@index([status])
+  @@map("tenants")
+}
+
+model TenantSubscription {
+  id           Int                @id @default(autoincrement())
+  tenant_id    Int
+  plan_id      Int
+  status       SubscriptionStatus @default(active)
+  amount       Decimal            @db.Decimal(15, 2)
+  period_start DateTime           @db.Timestamptz(6)
+  period_end   DateTime           @db.Timestamptz(6)
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
+  tenant       Tenant             @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+  plan         SubscriptionPlan   @relation(fields: [plan_id], references: [id])
+
+  @@index([tenant_id, period_end])
+  @@index([plan_id])
+  @@map("tenant_subscriptions")
+}
+
+/// Platform-level operators (SaaS owner). Not tenant-scoped on purpose.
+model PlatformAdmin {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique @db.VarChar(255)
+  password_hash String   @db.VarChar(255)
+  full_name     String   @db.VarChar(255)
+  is_active     Boolean  @default(true)
+  createdAt     DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("platform_admins")
 }
