@@ -1,8 +1,13 @@
 import { Prisma, PrismaClient } from '../generated/prisma';
 import { currentTenantId } from './tenant-context';
 
+// Log từng câu SQL chỉ khi cần (PRISMA_LOG_QUERIES=1): mỗi request sinh hàng chục dòng, ghi console trên Windows chậm.
 const logLevels: Prisma.LogLevel[] =
-  process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'];
+  process.env.PRISMA_LOG_QUERIES === '1'
+    ? ['query', 'error', 'warn']
+    : process.env.NODE_ENV === 'development'
+      ? ['error', 'warn']
+      : ['error'];
 
 // Client gốc (role app_user, bị RLS chi phối). Không export: mọi truy vấn phải qua `prisma` bên dưới.
 const createBaseClient = () => new PrismaClient({ log: logLevels });
