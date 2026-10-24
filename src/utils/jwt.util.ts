@@ -10,9 +10,9 @@ export interface JwtPayload {
   scope: 'tenant' | 'platform';
 }
 
-export const generateToken = (payload: JwtPayload): string => {
+export const generateToken = (payload: JwtPayload, expiresIn: string = env.JWT_EXPIRES_IN): string => {
   return jwt.sign(payload, env.JWT_SECRET, {
-    expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
+    expiresIn: expiresIn as jwt.SignOptions['expiresIn'],
   });
 };
 

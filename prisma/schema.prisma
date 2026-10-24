@@ -1,6 +1,8 @@
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  // Gộp `include` thành một câu JOIN thay vì mỗi quan hệ một câu: mỗi câu SQL là một lượt đi về DB.
+  previewFeatures = ["relationJoins"]
 }
 
 datasource db {
