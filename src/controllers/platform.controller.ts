@@ -1,10 +1,13 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { Prisma } from '../generated/prisma';
 import { adminPrisma } from '../database/admin-db';
 import { generateToken } from '../utils/jwt.util';
 import { ApiError } from '../utils/apiError';
+import { platformService } from '../services/platform.service';
+import { auditPlatform } from '../utils/platformAudit';
 import { invalidateTenantCache, RESERVED_SUBDOMAINS, SUBDOMAIN_REGEX } from '../middlewares/tenant.middleware';
 
 const TRIAL_DAYS = 14;
@@ -32,6 +35,22 @@ const createTenantSchema = z.object({
 
 const statusSchema = z.object({ status: z.enum(['trial', 'active', 'suspended', 'closed']) });
 
+const PLATFORM_TOKEN_TTL = '8h';
+const strongPassword = z.string().min(12, 'Mật khẩu phải có ít nhất 12 ký tự').max(128);
+
+const updateTenantSchema = z.object({
+  name: z.string().min(2).max(255).optional(),
+  contact_email: z.string().email().nullable().optional(),
+  contact_phone: z.string().max(20).nullable().optional(),
+});
+const changePlanSchema = z.object({ plan_id: z.number().int().positive(), months: z.number().int().min(1).max(36).default(1) });
+const extendSchema = z.object({ days: z.number().int().min(1).max(365) });
+const changePasswordSchema = z.object({ current_password: z.string().min(1), new_password: strongPassword });
+const createAdminSchema = z.object({ email: z.string().email().toLowerCase(), password: strongPassword, full_name: z.string().min(2).max(255) });
+const updateAdminSchema = z.object({ full_name: z.string().min(2).max(255).optional(), is_active: z.boolean().optional() });
+const tenantUserUpdateSchema = z.object({ is_active: z.boolean() });
+const resetPasswordSchema = z.object({ password: strongPassword.optional() });
+
 const planSchema = z.object({
   code: z.string().min(2).max(50),
   name: z.string().min(2).max(255),
@@ -50,8 +69,8 @@ const parse = <T extends z.ZodTypeAny>(schema: T, data: unknown): z.infer<T> => 
   return result.data;
 };
 
-const idParam = (req: Request): number => {
-  const id = Number(req.params.id);
+const idParam = (req: Request, name = 'id'): number => {
+  const id = Number(req.params[name]);
   if (!Number.isInteger(id) || id <= 0) throw new ApiError(400, 'ID không hợp lệ');
   return id;
 };
@@ -70,7 +89,8 @@ export const platformController = {
       role: 'admin',
       tenantId: 0,
       scope: 'platform',
-    });
+    }, PLATFORM_TOKEN_TTL);
+    auditPlatform(req, 'login', { admin_id: admin.id });
     res.json({
       status: 'success',
       data: { token, admin: { id: admin.id, email: admin.email, full_name: admin.full_name } },
@@ -162,35 +182,146 @@ export const platformController = {
       return { tenant, admin };
     });
 
+    auditPlatform(req, 'tenant.create', { tenant_id: result.tenant.id, subdomain: result.tenant.subdomain });
     res.status(201).json({ status: 'success', data: result });
   },
 
   async updateTenantStatus(req: Request, res: Response) {
     const id = idParam(req);
     const { status } = parse(statusSchema, req.body);
-    const tenant = await adminPrisma.tenant.update({ where: { id }, data: { status } });
-    invalidateTenantCache(tenant.subdomain);
+    const { before, tenant } = await platformService.setStatus(id, status);
+    auditPlatform(req, 'tenant.status', { tenant_id: id, from: before, to: status });
     res.json({ status: 'success', data: tenant });
   },
 
   async stats(_req: Request, res: Response) {
-    const now = new Date();
-    const [byStatus, mrr, users] = await Promise.all([
-      adminPrisma.tenant.groupBy({ by: ['status'], _count: { _all: true } }),
-      adminPrisma.tenantSubscription.aggregate({
-        _sum: { amount: true },
-        where: { status: 'active', period_end: { gt: now }, amount: { gt: 0 } },
-      }),
-      adminPrisma.user.count(),
-    ]);
-    res.json({
-      status: 'success',
-      data: {
-        tenants: Object.fromEntries(byStatus.map((r) => [r.status, r._count._all])),
-        mrr: mrr._sum.amount ?? 0,
-        total_users: users,
-      },
+    res.json({ status: 'success', data: await platformService.stats() });
+  },
+
+  async me(req: Request, res: Response) {
+    const admin = await adminPrisma.platformAdmin.findUnique({
+      where: { id: req.platformAdmin!.id },
+      select: { id: true, email: true, full_name: true, createdAt: true },
     });
+    res.json({ status: 'success', data: admin });
+  },
+
+  async changePassword(req: Request, res: Response) {
+    const { current_password, new_password } = parse(changePasswordSchema, req.body);
+    const admin = await adminPrisma.platformAdmin.findUniqueOrThrow({ where: { id: req.platformAdmin!.id } });
+    if (!(await bcrypt.compare(current_password, admin.password_hash))) {
+      throw new ApiError(400, 'Mật khẩu hiện tại không đúng');
+    }
+    await adminPrisma.platformAdmin.update({
+      where: { id: admin.id },
+      data: { password_hash: await bcrypt.hash(new_password, 12) },
+    });
+    auditPlatform(req, 'admin.change_password');
+    res.json({ status: 'success', message: 'Đã đổi mật khẩu' });
+  },
+
+  async getTenant(req: Request, res: Response) {
+    res.json({ status: 'success', data: await platformService.tenantDetail(idParam(req)) });
+  },
+
+  async updateTenant(req: Request, res: Response) {
+    const id = idParam(req);
+    const data = parse(updateTenantSchema, req.body);
+    const tenant = await platformService.updateTenant(id, data);
+    auditPlatform(req, 'tenant.update', { tenant_id: id, fields: Object.keys(data) });
+    res.json({ status: 'success', data: tenant });
+  },
+
+  async listSubscriptions(req: Request, res: Response) {
+    res.json({ status: 'success', data: await platformService.listSubscriptions(idParam(req)) });
+  },
+
+  async changePlan(req: Request, res: Response) {
+    const id = idParam(req);
+    const { plan_id, months } = parse(changePlanSchema, req.body);
+    const result = await platformService.changePlan(id, plan_id, months);
+    auditPlatform(req, 'tenant.change_plan', { tenant_id: id, from_plan: result.previous_plan_id, to_plan: plan_id, months });
+    res.json({ status: 'success', data: result });
+  },
+
+  async extend(req: Request, res: Response) {
+    const id = idParam(req);
+    const { days } = parse(extendSchema, req.body);
+    const result = await platformService.extend(id, days);
+    auditPlatform(req, 'tenant.extend', { tenant_id: id, days });
+    res.json({ status: 'success', data: result });
+  },
+
+  // ─── Người dùng của trung tâm ──────────────────────────────────────────────
+  async listTenantUsers(req: Request, res: Response) {
+    const id = idParam(req);
+    const role = typeof req.query.role === 'string' ? req.query.role : undefined;
+    const users = await adminPrisma.user.findMany({
+      where: { tenant_id: id, ...(role ? { role: role as any } : {}) },
+      orderBy: { id: 'asc' },
+      take: 200,
+      select: { id: true, email: true, full_name: true, role: true, is_active: true, createdAt: true },
+    });
+    res.json({ status: 'success', data: users });
+  },
+
+  async setTenantUserActive(req: Request, res: Response) {
+    const tenantId = idParam(req);
+    const userId = idParam(req, 'userId');
+    const { is_active } = parse(tenantUserUpdateSchema, req.body);
+    const result = await adminPrisma.user.updateMany({ where: { id: userId, tenant_id: tenantId }, data: { is_active } });
+    if (result.count === 0) throw new ApiError(404, 'Không tìm thấy người dùng trong trung tâm này');
+    auditPlatform(req, 'tenant_user.set_active', { tenant_id: tenantId, user_id: userId, is_active });
+    res.json({ status: 'success', message: is_active ? 'Đã kích hoạt' : 'Đã vô hiệu hóa' });
+  },
+
+  /** Đặt lại mật khẩu người dùng của trung tâm (ví dụ chủ trung tâm quên mật khẩu). Mật khẩu mới chỉ trả về một lần. */
+  async resetTenantUserPassword(req: Request, res: Response) {
+    const tenantId = idParam(req);
+    const userId = idParam(req, 'userId');
+    const { password } = parse(resetPasswordSchema, req.body ?? {});
+    const newPassword = password ?? randomBytes(9).toString('base64url');
+    const result = await adminPrisma.user.updateMany({
+      where: { id: userId, tenant_id: tenantId },
+      data: { password_hash: await bcrypt.hash(newPassword, 12) },
+    });
+    if (result.count === 0) throw new ApiError(404, 'Không tìm thấy người dùng trong trung tâm này');
+    auditPlatform(req, 'tenant_user.reset_password', { tenant_id: tenantId, user_id: userId });
+    res.json({ status: 'success', data: { password: newPassword, generated: !password } });
+  },
+
+  // ─── Quản trị viên nền tảng ────────────────────────────────────────────────
+  async listAdmins(_req: Request, res: Response) {
+    const admins = await adminPrisma.platformAdmin.findMany({
+      orderBy: { id: 'asc' },
+      select: { id: true, email: true, full_name: true, is_active: true, createdAt: true },
+    });
+    res.json({ status: 'success', data: admins });
+  },
+
+  async createAdmin(req: Request, res: Response) {
+    const input = parse(createAdminSchema, req.body);
+    const admin = await adminPrisma.platformAdmin.create({
+      data: { email: input.email, full_name: input.full_name, password_hash: await bcrypt.hash(input.password, 12) },
+      select: { id: true, email: true, full_name: true, is_active: true },
+    });
+    auditPlatform(req, 'admin.create', { target_id: admin.id });
+    res.status(201).json({ status: 'success', data: admin });
+  },
+
+  async updateAdmin(req: Request, res: Response) {
+    const id = idParam(req);
+    const data = parse(updateAdminSchema, req.body);
+    if (id === req.platformAdmin!.id && data.is_active === false) {
+      throw new ApiError(400, 'Không thể tự vô hiệu hóa tài khoản của chính mình');
+    }
+    const admin = await adminPrisma.platformAdmin.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, full_name: true, is_active: true },
+    });
+    auditPlatform(req, 'admin.update', { target_id: id, fields: Object.keys(data) });
+    res.json({ status: 'success', data: admin });
   },
 
   async listPlans(_req: Request, res: Response) {
