@@ -1,25 +1,17 @@
 import axios from 'axios';
 
 export interface DropoutRiskFeatures {
-  Attendance_Rate: number;
-  Unexcused_Absence_Count: number;
-  Unexcused_Absence_Rate: number;
-  Late_Count: number;
-  Consecutive_Unexcused_Absences: number;
-  Days_Since_Last_Attended: number;
-  Assignment_Missing_Rate: number;
-  Assignment_Late_Count: number;
-  Average_Score: number;
-  Score_Trend: number;
-  Has_Overdue_Invoice: number;
-  Days_Overdue: number;
-  Class_Progress_Ratio: number;
+  Average_Score: number | null;
+  Pass_Rate: number;
+  Not_Evaluated_Rate: number;
 }
 
 export interface DropoutRiskResponse {
-  model_version?: string;
-  risk_level: 'HIGH_RISK' | 'MEDIUM_RISK' | 'LOW_RISK';
-  dropout_probability: number;
+  model_version: string;
+  model_flagged: boolean;
+  risk_score: number;
+  threshold: number;
+  score_type: 'source_model_score';
   top_reasons: string[];
   action: string;
 }
@@ -29,11 +21,14 @@ export class DropoutRiskApi {
 
   async fetchPrediction(payload: DropoutRiskFeatures): Promise<DropoutRiskResponse | null> {
     try {
-      const response = await axios.post<DropoutRiskResponse>(this.AI_URL, payload, {
-        timeout: 8000,
-      });
-
-      return response.data;
+      const { data } = await axios.post<DropoutRiskResponse>(this.AI_URL, payload, { timeout: 8000 });
+      if (data.model_version !== 'uci_academic_public_1' || data.score_type !== 'source_model_score'
+          || !Number.isFinite(data.risk_score) || data.risk_score < 0 || data.risk_score > 100
+          || typeof data.model_flagged !== 'boolean' || !Array.isArray(data.top_reasons)
+          || !Number.isFinite(data.threshold) || data.threshold <= 0 || data.threshold >= 1) {
+        throw new Error('Incompatible dropout API response');
+      }
+      return data;
     } catch (error: any) {
       console.error('[DropoutRiskApi] AI service error:', error.message);
       return null;

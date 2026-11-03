@@ -284,6 +284,17 @@ export class ClassController {
         }
     }
 
+    async getDropoutRisk(req: Request, res: Response) {
+        try {
+            const classId = Number(req.params.id);
+            if (!Number.isInteger(classId) || classId <= 0) return res.status(400).json({ success: false, message: 'ID lớp không hợp lệ' });
+            await dropoutRiskService.assertScoringAccess(classId, req.user!.userId, req.user!.role);
+            return res.json({ success: true, data: await dropoutRiskService.getClassSnapshots(classId) });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+        }
+    }
+
     async scoreDropoutRisk(req: Request, res: Response) {
         try {
             const classId = Number(req.params.id);
@@ -295,8 +306,9 @@ export class ClassController {
                 });
             }
 
+            await dropoutRiskService.assertScoringAccess(classId, req.user!.userId, req.user!.role);
             const results = await dropoutRiskService.scoreClass(classId);
-            const successCount = results.filter((item: any) => item.success).length;
+            const successCount = results.filter((item: any) => item.success && !item.skipped).length;
 
             return res.status(200).json({
                 success: true,
