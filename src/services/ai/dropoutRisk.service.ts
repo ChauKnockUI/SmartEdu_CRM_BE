@@ -2,7 +2,7 @@ import { Prisma, PredictionType } from '../../generated/prisma';
 import { prisma, withTenantTx } from '../../database/db';
 import { currentTenantId } from '../../database/tenant-context';
 import { dropoutRiskApi } from './dropoutRisk.api';
-import { academicSnapshot, attendanceRule, combinedRisk, HYBRID_VERSION, MAPPING_VERSION, normalizeScore, storedDay, vietnamDay } from './dropoutRisk.policy';
+import { academicSnapshot, attendanceRule, combinedRisk, HYBRID_VERSION, MAPPING_VERSION, normalizeScore, storedDay, tuitionSnapshot, vietnamDay } from './dropoutRisk.policy';
 
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
@@ -60,38 +60,28 @@ export class DropoutRiskService {
       // A grade already available is usable even before the submission deadline.
       if (due || grade !== null) scores.push(grade);
     }
-    const snapshot = academicSnapshot(scores, held.length, planned, passScore);
+    const tuition = tuitionSnapshot(classData.invoices, now);
+    const academic = academicSnapshot(scores, held.length, planned, passScore);
+    const snapshot = { ...academic, features: { ...academic.features, ...tuition.features }, finance_known: tuition.known };
     const attendance = attendanceRule(held.map(s => s.attendances[0]?.status || null));
-    const overdue = classData.invoices.filter(invoice => {
-      if (!invoice.due_date || storedDay(invoice.due_date) >= today || !['pending', 'partial', 'overdue'].includes(invoice.status)) return false;
-      const remaining = Number(invoice.total_amount) - Number(invoice.discount_amount)
-        - invoice.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
-      return remaining > 0;
-    });
     const prediction = snapshot.eligible ? await dropoutRiskApi.fetchPrediction(snapshot.features) : null;
     const modelFlagged = prediction?.model_flagged === true;
-    const overdueDays = overdue.reduce((maximum, invoice) => Math.max(maximum,
-      Math.round((Date.parse(today) - Date.parse(storedDay(invoice.due_date!))) / 86_400_000)), 0);
-    const tuitionKnown = classData.invoices.some(invoice => !['cancelled', 'refunded'].includes(invoice.status)
-      && (invoice.due_date !== null || invoice.status === 'paid'));
-    const paidLateDays = classData.invoices.reduce((maximum, invoice) => {
-      if (!invoice.due_date || ['cancelled', 'refunded'].includes(invoice.status)) return maximum;
-      return invoice.payments.reduce((days, payment) => !payment.paid_at || payment.paid_at > now ? days
-        : Math.max(days, Math.round((Date.parse(vietnamDay(payment.paid_at))
-          - Date.parse(storedDay(invoice.due_date!))) / 86_400_000)), maximum);
-    }, 0);
-    const hybrid = combinedRisk({ academic: prediction?.risk_score ?? null, modelFlagged,
-      attendance, tuitionKnown, overdueDays });
+    const includesFinance = prediction?.includes_finance === true;
+    const hybrid = combinedRisk({ modelScore: prediction?.risk_score ?? null, modelFlagged, includesFinance,
+      attendance, tuitionKnown: tuition.known, overdueDays: tuition.overdueDays });
     const level = hybrid.level;
     const reasons: string[] = [];
-    if (modelFlagged) reasons.push(`[Model học tập] Điểm rủi ro vượt ngưỡng theo dõi. Dữ liệu: đạt ${Math.round(snapshot.features.Pass_Rate * 100)}%, chưa được đánh giá ${Math.round(snapshot.features.Not_Evaluated_Rate * 100)}%. Cần liên hệ để tìm hiểu khó khăn.`);
+    if (modelFlagged) reasons.push(includesFinance
+      ? '[Model học tập và học phí] Điểm AI kết hợp vượt ngưỡng theo dõi; cần xem xét học tập và học phí, chưa xác định nguyên nhân riêng lẻ.'
+      : `[Model học tập] Điểm rủi ro vượt ngưỡng theo dõi. Dữ liệu: đạt ${Math.round(snapshot.features.Pass_Rate * 100)}%, chưa được đánh giá ${Math.round(snapshot.features.Not_Evaluated_Rate * 100)}%. Cần liên hệ để tìm hiểu khó khăn.`);
     if (attendance.flagged) reasons.push(`[Chuyên cần] Vắng không phép ${attendance.absent} buổi, liên tiếp ${attendance.consecutive} buổi.`);
-    if (overdue.length) reasons.push(`[Học phí] Có ${overdue.length} khoản còn dư nợ, quá hạn tối đa ${overdueDays} ngày.`);
+    if (tuition.overdueIds.length) reasons.push(`[Học phí] Có ${tuition.overdueIds.length} khoản còn dư nợ, quá hạn tối đa ${tuition.overdueDays} ngày.`);
     if (!snapshot.eligible) reasons.push('[Dữ liệu] Chưa có điểm học tập; phần AI được bỏ khỏi phép tính.');
     else if (!prediction) reasons.push('Model tạm không sẵn sàng; các quy tắc chuyên cần và học phí vẫn được kiểm tra.');
-    else if (!modelFlagged) reasons.push('Model học tập chưa vượt ngưỡng theo dõi.');
+    else if (!modelFlagged) reasons.push(includesFinance ? 'Model học tập và học phí chưa vượt ngưỡng theo dõi.' : 'Model học tập chưa vượt ngưỡng theo dõi.');
+    if (prediction && !includesFinance) reasons.push('[Dữ liệu] Học phí chưa đủ thông tin; AI dùng ba đặc trưng học tập.');
     if (prediction && snapshot.limited_data) reasons.push('Ước tính sớm: mới có một bài được chấm, cần tiếp tục cập nhật.');
-    if (hybrid.score !== null) reasons.unshift(`[Tổng hợp] ${hybrid.score}/100 điểm rủi ro từ ${hybrid.available_components}/3 nhóm thông tin.`);
+    if (hybrid.score !== null) reasons.unshift(`[Tổng hợp] ${hybrid.score}/100 điểm rủi ro từ ${hybrid.available_components}/${hybrid.total_components} thành phần.`);
     else reasons.push('Chưa có dữ liệu học tập, điểm danh hoặc hóa đơn đủ để tính điểm tổng hợp.');
     const action = level === 'high' ? 'Liên hệ học viên để tìm hiểu khó khăn, tư vấn hoặc thống nhất phương án hỗ trợ.'
       : level === 'medium' ? 'Kiểm tra căn cứ cảnh báo và trao đổi với học viên để hỗ trợ sớm.' : 'Tiếp tục theo dõi và bổ sung dữ liệu còn thiếu.';
@@ -99,16 +89,18 @@ export class DropoutRiskService {
       class_id: classId, mapping_version: MAPPING_VERSION, model: prediction,
       model_status: !snapshot.eligible ? 'not_eligible' : prediction ? 'scored' : 'unavailable',
       risk_level: level, risk_score: hybrid.score, score_type: hybrid.score_type, hybrid,
-      academic_score: prediction?.risk_score ?? null, top_reasons: reasons, action,
+      model_score: prediction?.risk_score ?? null, model_includes_finance: includesFinance,
+      academic_score: includesFinance ? null : prediction?.risk_score ?? null, top_reasons: reasons, action,
       evidence: {
         attendance: { attended: attendance.attended, recorded: attendance.recorded,
           absent: attendance.absent, consecutive: attendance.consecutive },
-        tuition: { overdue_days: overdueDays, overdue_count: overdue.length, paid_late_days: paidLateDays },
-        academic: { flagged: modelFlagged, passed: Math.round(snapshot.features.Pass_Rate * scores.length),
+        model: { flagged: modelFlagged, includes_finance: includesFinance },
+        tuition: { known: tuition.known, overdue_days: tuition.overdueDays, overdue_count: tuition.overdueIds.length, paid_late_days: tuition.paidLateDays },
+        academic: { flagged: modelFlagged && !includesFinance, passed: Math.round(snapshot.features.Pass_Rate * scores.length),
           assessed: scores.length, scored: snapshot.scored_assessments },
       },
       evaluated_at: now.toISOString(),
-      rules: { attendance, overdue_invoice_ids: overdue.map(i => i.id) }, snapshot,
+      rules: { attendance, overdue_invoice_ids: tuition.overdueIds }, snapshot,
     };
     // Serialize a student's concurrent class updates and notification deduplication.
     const tenantId = currentTenantId();
@@ -178,11 +170,14 @@ export class DropoutRiskService {
           result_data: { path: ['class_id'], equals: classId } }, orderBy: { id: 'desc' },
       });
       const data = latest?.result_data as Record<string, any> | null;
-      if (!data || ![MAPPING_VERSION, 'crm_assessments_to_uci_1'].includes(data.mapping_version)) return null;
+      if (!data || ![MAPPING_VERSION, 'crm_assessments_to_uci_2_early', 'crm_assessments_to_uci_1'].includes(data.mapping_version)) return null;
       return { student_id: studentId, class_id: classId,
         risk_score: data.hybrid?.version === HYBRID_VERSION ? data.risk_score ?? null : null,
         risk_level: data.risk_level ?? null, score_type: data.hybrid?.version === HYBRID_VERSION ? 'hybrid_risk_index' : 'academic_legacy',
-        hybrid: data.hybrid?.version === HYBRID_VERSION ? data.hybrid : null, academic_score: data.academic_score ?? data.model?.risk_score ?? null,
+        hybrid: data.hybrid?.version === HYBRID_VERSION ? data.hybrid : null,
+        model_score: data.model_score ?? data.model?.risk_score ?? null,
+        model_includes_finance: data.model_includes_finance === true,
+        academic_score: data.model_includes_finance ? null : data.academic_score ?? data.model?.risk_score ?? null,
         evidence: data.evidence || null,
         top_reasons: data.top_reasons || [], model_status: data.model_status,
         limited_data: data.snapshot?.limited_data || false, action: data.action,
