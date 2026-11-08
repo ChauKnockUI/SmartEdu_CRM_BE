@@ -1,5 +1,6 @@
 import { AssignmentSubmissionStatus, UserRole } from '../generated/prisma';
 import { assignmentRepository } from '../repositories/assignment.repository';
+import { dropoutRiskService } from './ai/dropoutRisk.service';
 
 export interface CreateAssignmentInput {
   title: string;
@@ -116,12 +117,16 @@ export class AssignmentService {
       throw err;
     }
 
-    return assignmentRepository.upsertSubmission(assignmentId, studentId, {
+    const result = await assignmentRepository.upsertSubmission(assignmentId, studentId, {
       status: input.status,
       submitted_at: input.submitted_at ?? (input.status === 'submitted' || input.status === 'late' ? new Date() : null),
       score: input.score ?? null,
       feedback: input.feedback ?? null,
     });
+    void dropoutRiskService.scoreStudent(studentId, assignment.class_id).catch(error => {
+      console.error('[AssignmentService] dropout scoring failed:', error);
+    });
+    return result;
   }
 }
 

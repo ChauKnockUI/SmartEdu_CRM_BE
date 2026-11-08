@@ -1,220 +1,209 @@
-import { AttendanceStatus, DropoutRiskLevel, PredictionType, Prisma } from '../../generated/prisma';
-import { prisma } from '../../database/db';
-import { dropoutRiskApi, DropoutRiskFeatures } from './dropoutRisk.api';
+import { Prisma, PredictionType } from '../../generated/prisma';
+import { prisma, withTenantTx } from '../../database/db';
+import { currentTenantId } from '../../database/tenant-context';
+import { dropoutRiskApi } from './dropoutRisk.api';
+import { academicSnapshot, attendanceRule, combinedRisk, HYBRID_VERSION, MAPPING_VERSION, normalizeScore, storedDay, tuitionSnapshot, vietnamDay } from './dropoutRisk.policy';
 
-const MS_PER_DAY = 1000 * 60 * 60 * 24;
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const round4 = (value: number) => Math.round(value * 10000) / 10000;
+const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 export class DropoutRiskService {
-  private riskLevelFromScore(score: number): DropoutRiskLevel {
-    if (score >= 70) return DropoutRiskLevel.high;
-    if (score >= 40) return DropoutRiskLevel.medium;
-    return DropoutRiskLevel.low;
-  }
-
-  private daysBetween(from: Date, to: Date = new Date()) {
-    return Math.max(0, Math.floor((to.getTime() - from.getTime()) / MS_PER_DAY));
-  }
-
-  private normalizeScore(score: number | null, maxScore: number | null | undefined) {
-    if (score === null || score === undefined) return null;
-    if (maxScore && maxScore > 0) return clamp((score / maxScore) * 10, 0, 10);
-    return clamp(score, 0, 10);
-  }
-
-  async prepareDropoutFeatures(studentId: number, classId: number): Promise<DropoutRiskFeatures> {
-    const now = new Date();
-    const classData = await prisma.class.findUnique({
-      where: { id: classId },
-      include: {
-        classEnrollments: {
-          where: { student_id: studentId },
-          select: { id: true, status: true },
-        },
-        schedules: {
-          where: { status: { not: 'cancelled' } },
-          include: {
-            attendances: {
-              where: { student_id: studentId },
-              select: { status: true },
-            },
-          },
-          orderBy: { date: 'asc' },
-        },
-        assignments: {
-          include: {
-            submissions: {
-              where: { student_id: studentId },
-              select: { status: true, submitted_at: true, score: true },
-            },
-          },
-        },
-        tests: {
-          include: {
-            testResults: {
-              where: { student_id: studentId },
-              select: { score: true },
-            },
-          },
-          orderBy: { test_date: 'asc' },
-        },
-        invoices: {
-          where: { student_id: studentId },
-          select: { status: true, due_date: true },
-        },
-      },
-    });
-
-    if (!classData) {
-      const err = new Error('Khong tim thay lop hoc');
-      (err as any).statusCode = 404;
-      throw err;
+  async assertScoringAccess(classId: number, userId: number, role: string) {
+    if (!['admin', 'sale', 'teacher'].includes(role)) throw Object.assign(new Error('Không có quyền đánh giá'), { statusCode: 403 });
+    if (role === 'teacher') {
+      const owned = await prisma.class.findFirst({ where: { id: classId, teacher: { user_id: userId } }, select: { id: true } });
+      if (!owned) throw Object.assign(new Error('Chỉ được đánh giá lớp được phân công'), { statusCode: 403 });
     }
-
-    if (classData.classEnrollments.length === 0) {
-      const err = new Error('Hoc vien chua duoc ghi danh vao lop nay');
-      (err as any).statusCode = 400;
-      throw err;
-    }
-
-    const heldSchedules = classData.schedules.filter((schedule) => schedule.date <= now);
-    const totalHeld = heldSchedules.length;
-    const attendanceStatuses = heldSchedules.map((schedule) => schedule.attendances[0]?.status || null);
-    const attendedCount = attendanceStatuses.filter((status) => status === AttendanceStatus.present || status === AttendanceStatus.late).length;
-    const unexcusedCount = attendanceStatuses.filter((status) => status === AttendanceStatus.absent).length;
-    const lateCount = attendanceStatuses.filter((status) => status === AttendanceStatus.late).length;
-
-    let consecutiveUnexcused = 0;
-    for (const schedule of [...heldSchedules].reverse()) {
-      const status = schedule.attendances[0]?.status || null;
-      if (status === AttendanceStatus.absent) consecutiveUnexcused += 1;
-      else break;
-    }
-
-    const lastAttended = [...heldSchedules]
-      .reverse()
-      .find((schedule) => {
-        const status = schedule.attendances[0]?.status;
-        return status === AttendanceStatus.present || status === AttendanceStatus.late;
-      });
-
-    const assignmentStats = classData.assignments.reduce(
-      (acc, assignment) => {
-        const submission = assignment.submissions[0];
-        const status = submission?.status;
-        const duePassed = assignment.due_date ? assignment.due_date < now : true;
-
-        if (status === 'excused') return acc;
-
-        acc.total += 1;
-        if (status === 'late') acc.late += 1;
-        if (status === 'missing' || (!submission && duePassed)) acc.missing += 1;
-        return acc;
-      },
-      { total: 0, missing: 0, late: 0 }
-    );
-
-    const scores = classData.tests
-      .map((test) => this.normalizeScore(test.testResults[0]?.score ?? null, test.max_score))
-      .filter((score): score is number => score !== null);
-
-    const averageScore = scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 7;
-    const splitIndex = Math.max(1, Math.floor(scores.length / 2));
-    const earlyScores = scores.slice(0, splitIndex);
-    const recentScores = scores.slice(splitIndex);
-    const earlyAvg = earlyScores.length ? earlyScores.reduce((sum, score) => sum + score, 0) / earlyScores.length : averageScore;
-    const recentAvg = recentScores.length ? recentScores.reduce((sum, score) => sum + score, 0) / recentScores.length : averageScore;
-
-    const overdueInvoices = classData.invoices.filter((invoice) => {
-      if (invoice.status === 'overdue') return true;
-      return !!invoice.due_date && invoice.due_date < now && ['pending', 'partial'].includes(invoice.status);
-    });
-    const daysOverdue = overdueInvoices.reduce((max, invoice) => {
-      if (!invoice.due_date) return max;
-      return Math.max(max, this.daysBetween(invoice.due_date, now));
-    }, 0);
-
-    const totalSchedules = classData.schedules.length;
-
-    return {
-      Attendance_Rate: totalHeld ? round4(attendedCount / totalHeld) : 1,
-      Unexcused_Absence_Count: unexcusedCount,
-      Unexcused_Absence_Rate: totalHeld ? round4(unexcusedCount / totalHeld) : 0,
-      Late_Count: lateCount,
-      Consecutive_Unexcused_Absences: consecutiveUnexcused,
-      Days_Since_Last_Attended: lastAttended ? this.daysBetween(lastAttended.date, now) : (totalHeld ? this.daysBetween(heldSchedules[0].date, now) : 0),
-      Assignment_Missing_Rate: assignmentStats.total ? round4(assignmentStats.missing / assignmentStats.total) : 0,
-      Assignment_Late_Count: assignmentStats.late,
-      Average_Score: Math.round(averageScore * 100) / 100,
-      Score_Trend: Math.round((recentAvg - earlyAvg) * 100) / 100,
-      Has_Overdue_Invoice: overdueInvoices.length > 0 ? 1 : 0,
-      Days_Overdue: daysOverdue,
-      Class_Progress_Ratio: totalSchedules ? round4(totalHeld / totalSchedules) : 0,
-    };
   }
 
   async scoreStudent(studentId: number, classId: number) {
-    const features = await this.prepareDropoutFeatures(studentId, classId);
-    const aiResponse = await dropoutRiskApi.fetchPrediction(features);
-
-    if (!aiResponse) {
-      return { success: false, skipped: true, features };
+    const now = new Date();
+    const today = vietnamDay(now);
+    const classData = await prisma.class.findUnique({
+      where: { id: classId },
+      include: {
+        course: { select: { total_sessions: true } },
+        teacher: { select: { user_id: true } },
+        classEnrollments: { where: { student_id: studentId }, include: { student: { select: { full_name: true } } } },
+        schedules: {
+          where: { status: { not: 'cancelled' } }, orderBy: { date: 'asc' },
+          include: { attendances: { where: { student_id: studentId }, select: { status: true } } },
+        },
+        assignments: { include: { submissions: { where: { student_id: studentId } } } },
+        tests: { include: { testResults: { where: { student_id: studentId } } } },
+        invoices: { where: { student_id: studentId }, include: { payments: true } },
+      },
+    });
+    if (!classData) throw Object.assign(new Error('Không tìm thấy lớp học'), { statusCode: 404 });
+    const enrollment = classData.classEnrollments[0];
+    if (!enrollment) throw Object.assign(new Error('Học viên chưa ghi danh vào lớp'), { statusCode: 400 });
+    if (enrollment.status !== 'active' || classData.status !== 'ongoing') {
+      return { success: true, skipped: true, reason: 'Chỉ theo dõi học viên đang học trong lớp đang diễn ra.' };
     }
-
-    const score = clamp(aiResponse.dropout_probability, 0, 100);
-    const level = this.riskLevelFromScore(score);
-
-    const updatedStudent = await prisma.student.update({
-      where: { id: studentId },
-      data: {
-        dropout_risk: score,
-        dropout_risk_level: level,
-        dropout_risk_reasons: aiResponse.top_reasons,
-        dropout_risk_updated_at: new Date(),
+    const held = classData.schedules.filter(s => s.status === 'completed' || storedDay(s.date) < today
+      || (storedDay(s.date) === today && s.attendances.length > 0));
+    const planned = Math.max(classData.course?.total_sessions || 0, classData.schedules.length);
+    const passScore = Number(process.env.DROPOUT_PASS_SCORE || 5);
+    if (!Number.isFinite(passScore) || passScore <= 0 || passScore > 10) throw new Error('Invalid DROPOUT_PASS_SCORE');
+    const scores: Array<number | null> = [];
+    for (const test of classData.tests) {
+      if (!test.test_date || storedDay(test.test_date) > today || test.createdAt > now) continue;
+      scores.push(normalizeScore(test.testResults[0]?.score, test.max_score));
+    }
+    for (const assignment of classData.assignments) {
+      if (assignment.createdAt > now) continue;
+      const submission = assignment.submissions[0];
+      if (submission?.status === 'excused') continue;
+      const submitted = submission?.submitted_at && submission.submitted_at <= now
+        && ['submitted', 'late'].includes(submission.status);
+      const grade = submitted ? normalizeScore(submission.score, assignment.max_score) : null;
+      const due = assignment.due_date && storedDay(assignment.due_date) < today;
+      // A grade already available is usable even before the submission deadline.
+      if (due || grade !== null) scores.push(grade);
+    }
+    const tuition = tuitionSnapshot(classData.invoices, now);
+    const academic = academicSnapshot(scores, held.length, planned, passScore);
+    const snapshot = { ...academic, features: { ...academic.features, ...tuition.features }, finance_known: tuition.known };
+    const attendance = attendanceRule(held.map(s => s.attendances[0]?.status || null));
+    const prediction = snapshot.eligible ? await dropoutRiskApi.fetchPrediction(snapshot.features) : null;
+    const modelFlagged = prediction?.model_flagged === true;
+    const includesFinance = prediction?.includes_finance === true;
+    const hybrid = combinedRisk({ modelScore: prediction?.risk_score ?? null, modelFlagged, includesFinance,
+      attendance, tuitionKnown: tuition.known, overdueDays: tuition.overdueDays });
+    const level = hybrid.level;
+    const reasons: string[] = [];
+    if (modelFlagged) reasons.push(includesFinance
+      ? '[Model học tập và học phí] Điểm AI kết hợp vượt ngưỡng theo dõi; cần xem xét học tập và học phí, chưa xác định nguyên nhân riêng lẻ.'
+      : `[Model học tập] Điểm rủi ro vượt ngưỡng theo dõi. Dữ liệu: đạt ${Math.round(snapshot.features.Pass_Rate * 100)}%, chưa được đánh giá ${Math.round(snapshot.features.Not_Evaluated_Rate * 100)}%. Cần liên hệ để tìm hiểu khó khăn.`);
+    if (attendance.flagged) reasons.push(`[Chuyên cần] Vắng không phép ${attendance.absent} buổi, liên tiếp ${attendance.consecutive} buổi.`);
+    if (tuition.overdueIds.length) reasons.push(`[Học phí] Có ${tuition.overdueIds.length} khoản còn dư nợ, quá hạn tối đa ${tuition.overdueDays} ngày.`);
+    if (!snapshot.eligible) reasons.push('[Dữ liệu] Chưa có điểm học tập; phần AI được bỏ khỏi phép tính.');
+    else if (!prediction) reasons.push('Model tạm không sẵn sàng; các quy tắc chuyên cần và học phí vẫn được kiểm tra.');
+    else if (!modelFlagged) reasons.push(includesFinance ? 'Model học tập và học phí chưa vượt ngưỡng theo dõi.' : 'Model học tập chưa vượt ngưỡng theo dõi.');
+    if (prediction && !includesFinance) reasons.push('[Dữ liệu] Học phí chưa đủ thông tin; AI dùng ba đặc trưng học tập.');
+    if (prediction && snapshot.limited_data) reasons.push('Ước tính sớm: mới có một bài được chấm, cần tiếp tục cập nhật.');
+    if (hybrid.score !== null) reasons.unshift(`[Tổng hợp] ${hybrid.score}/100 điểm rủi ro từ ${hybrid.available_components}/${hybrid.total_components} thành phần.`);
+    else reasons.push('Chưa có dữ liệu học tập, điểm danh hoặc hóa đơn đủ để tính điểm tổng hợp.');
+    const action = level === 'high' ? 'Liên hệ học viên để tìm hiểu khó khăn, tư vấn hoặc thống nhất phương án hỗ trợ.'
+      : level === 'medium' ? 'Kiểm tra căn cứ cảnh báo và trao đổi với học viên để hỗ trợ sớm.' : 'Tiếp tục theo dõi và bổ sung dữ liệu còn thiếu.';
+    const result = {
+      class_id: classId, mapping_version: MAPPING_VERSION, model: prediction,
+      model_status: !snapshot.eligible ? 'not_eligible' : prediction ? 'scored' : 'unavailable',
+      risk_level: level, risk_score: hybrid.score, score_type: hybrid.score_type, hybrid,
+      model_score: prediction?.risk_score ?? null, model_includes_finance: includesFinance,
+      academic_score: includesFinance ? null : prediction?.risk_score ?? null, top_reasons: reasons, action,
+      evidence: {
+        attendance: { attended: attendance.attended, recorded: attendance.recorded,
+          absent: attendance.absent, consecutive: attendance.consecutive },
+        model: { flagged: modelFlagged, includes_finance: includesFinance },
+        tuition: { known: tuition.known, overdue_days: tuition.overdueDays, overdue_count: tuition.overdueIds.length, paid_late_days: tuition.paidLateDays },
+        academic: { flagged: modelFlagged && !includesFinance, passed: Math.round(snapshot.features.Pass_Rate * scores.length),
+          assessed: scores.length, scored: snapshot.scored_assessments },
       },
-    });
-
-    await prisma.aIPrediction.create({
-      data: {
-        prediction_type: PredictionType.dropout_risk,
-        reference_id: studentId,
-        input_data: features as unknown as Prisma.InputJsonValue,
-        result_data: {
-          ...aiResponse,
-          class_id: classId,
-        } as Prisma.InputJsonValue,
-      },
-    });
-
-    return {
-      success: true,
-      data: {
-        student_id: studentId,
-        class_id: classId,
-        dropout_risk: updatedStudent.dropout_risk,
-        dropout_risk_level: updatedStudent.dropout_risk_level,
-        top_reasons: aiResponse.top_reasons,
-        action: aiResponse.action,
-      },
-      features,
+      evaluated_at: now.toISOString(),
+      rules: { attendance, overdue_invoice_ids: tuition.overdueIds }, snapshot,
     };
+    // Serialize a student's concurrent class updates and notification deduplication.
+    const tenantId = currentTenantId();
+    const notificationCount = await withTenantTx(async tx => {
+      await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(${tenantId}::int, ${studentId}::int)`);
+      await tx.aIPrediction.create({ data: {
+        prediction_type: PredictionType.dropout_risk, reference_id: studentId,
+        input_data: json({ ...snapshot, pass_score: passScore, mapping_version: MAPPING_VERSION }), result_data: json(result),
+      } });
+      // Student summary reflects latest snapshots of all active classes, not the last class scored.
+      const active = await tx.classEnrollment.findMany({
+        where: { student_id: studentId, status: 'active', class: { status: 'ongoing' } }, select: { class_id: true },
+      });
+      const latest = await Promise.all(active.map(item => tx.aIPrediction.findFirst({
+        where: { prediction_type: PredictionType.dropout_risk, reference_id: studentId,
+          result_data: { path: ['class_id'], equals: item.class_id } }, orderBy: { id: 'desc' },
+      })));
+      const summaries = latest.map(item => item?.result_data as typeof result | null)
+        .filter((item): item is typeof result => !!item && item.hybrid?.version === HYBRID_VERSION);
+      const worst = summaries.reduce<typeof result | null>((current, item) => current === null
+        || (item.risk_score ?? -1) > (current.risk_score ?? -1) ? item : current, null);
+      await tx.student.update({ where: { id: studentId }, data: {
+        dropout_risk: worst?.risk_score ?? null, dropout_risk_level: worst?.risk_level ?? null,
+        dropout_risk_reasons: json({ version: HYBRID_VERSION, reasons: worst?.top_reasons || [], details: worst }),
+        dropout_risk_updated_at: now,
+      } });
+      const recipients = await tx.user.findMany({ where: { is_active: true,
+        OR: [{ role: 'admin' }, ...(classData.teacher?.user_id ? [{ id: classData.teacher.user_id }] : [])] }, select: { id: true } });
+      const warning = hybrid.level === 'high' || hybrid.level === 'medium';
+      let sent = 0;
+      if (warning) for (const recipient of recipients) {
+        const key = `dropout:${studentId}:${classId}:hybrid:${hybrid.level}`;
+        const existing = await tx.notification.findFirst({ where: {
+          user_id: recipient.id, metadata: { path: ['dedup_key'], equals: key },
+          createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+        } });
+        if (existing) continue;
+        await tx.notification.create({ data: {
+          user_id: recipient.id, type: 'system_alert',
+          title: `${hybrid.level === 'high' ? 'Cần liên hệ' : 'Cần theo dõi'}: ${enrollment.student.full_name} · ${hybrid.score}%`.slice(0, 255),
+          message: `${classData.name}: ${reasons.join(' ')} ${action}`,
+          link: `/lms/students/${studentId}?tab=classes&risk_class=${classId}`,
+          metadata: json({ dedup_key: key, kind: 'hybrid_risk', student_id: studentId, class_id: classId,
+            risk_score: hybrid.score, score_type: hybrid.score_type, hybrid_version: HYBRID_VERSION,
+            model_version: prediction?.model_version || null, mapping_version: MAPPING_VERSION }),
+        } });
+        sent++;
+      }
+      return sent;
+    });
+    return { success: true, data: { student_id: studentId, ...result, notifications_created: notificationCount }, features: snapshot.features };
   }
 
   async scoreClass(classId: number) {
-    const enrollments = await prisma.classEnrollment.findMany({
-      where: { class_id: classId, status: 'active' },
-      select: { student_id: true },
-    });
-
+    const enrollments = await prisma.classEnrollment.findMany({ where: { class_id: classId, status: 'active' }, select: { student_id: true } });
     const results = [];
     for (const enrollment of enrollments) {
-      results.push(await this.scoreStudent(enrollment.student_id, classId));
+      try { results.push({ student_id: enrollment.student_id, ...await this.scoreStudent(enrollment.student_id, classId) }); }
+      catch (error) { console.error('[DropoutRisk] scoring failed', classId, enrollment.student_id, error); results.push({ success: false, student_id: enrollment.student_id }); }
     }
-
     return results;
   }
+
+  private async readSnapshot(studentId: number, classId: number) {
+      const latest = await prisma.aIPrediction.findFirst({
+        where: { prediction_type: PredictionType.dropout_risk, reference_id: studentId,
+          result_data: { path: ['class_id'], equals: classId } }, orderBy: { id: 'desc' },
+      });
+      const data = latest?.result_data as Record<string, any> | null;
+      if (!data || ![MAPPING_VERSION, 'crm_assessments_to_uci_2_early', 'crm_assessments_to_uci_1'].includes(data.mapping_version)) return null;
+      return { student_id: studentId, class_id: classId,
+        risk_score: data.hybrid?.version === HYBRID_VERSION ? data.risk_score ?? null : null,
+        risk_level: data.risk_level ?? null, score_type: data.hybrid?.version === HYBRID_VERSION ? 'hybrid_risk_index' : 'academic_legacy',
+        hybrid: data.hybrid?.version === HYBRID_VERSION ? data.hybrid : null,
+        model_score: data.model_score ?? data.model?.risk_score ?? null,
+        model_includes_finance: data.model_includes_finance === true,
+        academic_score: data.model_includes_finance ? null : data.academic_score ?? data.model?.risk_score ?? null,
+        evidence: data.evidence || null,
+        top_reasons: data.top_reasons || [], model_status: data.model_status,
+        limited_data: data.snapshot?.limited_data || false, action: data.action,
+        evaluated_at: latest!.createdAt.toISOString() };
+  }
+
+  async getClassSnapshots(classId: number) {
+    const enrollments = await prisma.classEnrollment.findMany({ where: { class_id: classId }, select: { student_id: true } });
+    const rows = await Promise.all(enrollments.map(enrollment => this.readSnapshot(enrollment.student_id, classId)));
+    return rows.filter(row => row !== null);
+  }
+
+  async getStudentClassSnapshots(studentId: number, userId: number, role: string) {
+    if (!['admin', 'sale', 'teacher'].includes(role)) throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+    const enrollments = await prisma.classEnrollment.findMany({
+      where: { student_id: studentId, status: 'active', class: {
+        status: { in: ['ongoing', 'upcoming'] }, ...(role === 'teacher' ? { teacher: { user_id: userId } } : {}),
+      } },
+      select: { class_id: true, class: { select: { id: true, name: true, status: true } } },
+    });
+    return Promise.all(enrollments.map(async enrollment => ({
+      class_id: enrollment.class_id, class_name: enrollment.class.name, class_status: enrollment.class.status,
+      student_id: studentId, ...(await this.readSnapshot(studentId, enrollment.class_id)),
+    })));
+  }
+
 }
 
 export const dropoutRiskService = new DropoutRiskService();

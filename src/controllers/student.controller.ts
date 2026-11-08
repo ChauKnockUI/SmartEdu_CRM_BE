@@ -189,6 +189,17 @@ export class StudentController {
         }
     }
 
+    async getClassDropoutRisks(req: Request, res: Response) {
+        try {
+            const studentId = Number(req.params.id);
+            if (!Number.isSafeInteger(studentId) || studentId <= 0) return res.status(400).json({ success: false, message: 'ID học viên không hợp lệ' });
+            const data = await dropoutRiskService.getStudentClassSnapshots(studentId, req.user!.userId, req.user!.role);
+            return res.json({ success: true, data });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+        }
+    }
+
     async scoreDropoutRisk(req: Request, res: Response) {
         try {
             const studentId = Number(req.params.id);
@@ -201,6 +212,7 @@ export class StudentController {
                 });
             }
 
+            await dropoutRiskService.assertScoringAccess(classId, req.user!.userId, req.user!.role);
             const result = await dropoutRiskService.scoreStudent(studentId, classId);
 
             if (!result.success) {

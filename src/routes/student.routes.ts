@@ -13,6 +13,7 @@ router.get('/', studentController.getStudents);
 // Lấy chi tiết học viên
 router.get('/:id/invoices', invoiceController.getStudentInvoices);
 router.get('/:id', studentController.getStudentById);
+router.get('/:id/dropout-risk', authorize('admin', 'sale', 'teacher'), studentController.getClassDropoutRisks);
 
 // ─── Các tác vụ thay đổi dữ liệu yêu cầu quyền Admin hoặc Sale ──────────────
 

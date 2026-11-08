@@ -1,5 +1,6 @@
 import { Prisma } from '../generated/prisma';
 import { prisma, withTenantTx } from '../database/db';
+import { serializeStudentRisk } from '../services/ai/dropoutRisk.summary';
 import { currentTenantId } from '../database/tenant-context';
 
 export class StudentRepository {
@@ -9,7 +10,7 @@ export class StudentRepository {
         where?: Prisma.StudentWhereInput;
         orderBy?: Prisma.StudentOrderByWithRelationInput;
     }) {
-        return await prisma.student.findMany({
+        const students = await prisma.student.findMany({
             ...params,
             include: {
                 user: {
@@ -29,6 +30,7 @@ export class StudentRepository {
                 }
             }
         });
+        return students.map(serializeStudentRisk);
     }
 
     async count(where?: Prisma.StudentWhereInput) {
@@ -36,7 +38,7 @@ export class StudentRepository {
     }
 
     async findById(id: number) {
-        return await prisma.student.findUnique({
+        const student = await prisma.student.findUnique({
             where: { id },
             include: {
                 user: {
@@ -52,18 +54,22 @@ export class StudentRepository {
                 classEnrollments: {
                     include: {
                         class: {
-                            select: { id: true, name: true, start_date: true, end_date: true, status: true }
+                            select: { id: true, name: true, start_date: true, end_date: true, status: true,
+                                schedule_days: true, schedule_time: true,
+                                course: { select: { name: true } }, teacher: { select: { full_name: true } } }
                         }
                     }
                 }
             }
         });
+        return student ? serializeStudentRisk(student) : null;
     }
 
     async findByUserId(user_id: number) {
-        return await prisma.student.findUnique({
+        const student = await prisma.student.findUnique({
             where: { user_id }
         });
+        return student ? serializeStudentRisk(student) : null;
     }
 
     async findByEmail(email: string) {

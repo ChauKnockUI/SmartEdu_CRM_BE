@@ -3,10 +3,12 @@ import { env } from './config/env';
 import { app } from './app';
 import { connectDB, disconnectDB } from './database/db';
 import { disconnectAdminDB } from './database/admin-db';
+import { startDropoutRiskJob } from './services/ai/dropoutRisk.job';
 
 const startServer = async () => {
   try {
     await connectDB();
+    const stopDropoutRiskJob = startDropoutRiskJob();
 
     const server = app.listen(env.PORT, () => {
       console.log(`Server running at http://localhost:${env.PORT}`);
@@ -28,6 +30,7 @@ const startServer = async () => {
     const shutdown = async (signal: string) => {
       console.log(`\n${signal} received. Shutting down gracefully...`);
       server.close(async () => {
+        await stopDropoutRiskJob();
         await disconnectDB();
         await disconnectAdminDB();
         console.log('Database disconnected.');
