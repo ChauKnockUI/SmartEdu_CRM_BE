@@ -8,6 +8,8 @@ router.use(authenticate, authorize('admin', 'sale'));
 
 router.get('/', leadController.getLeads);
 router.get('/funnel', leadController.getLeadFunnel);
+router.get('/sources', leadController.getLeadSources);
+router.get('/scoring-dataset', authorize('admin'), leadController.exportScoringDataset);
 router.get('/:id', leadController.getLeadById);
 router.get('/:id/activities', leadController.getLeadActivities);
 router.post('/:id/activities', leadController.createLeadActivity);
