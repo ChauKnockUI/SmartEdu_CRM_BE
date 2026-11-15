@@ -1,21 +1,40 @@
 import { Request, Response } from 'express';
 import { leadService } from '../services/lead.service';
 import { leadScoringService } from '../services/ai/leadScoring.service';
+import { leadScoringRepository } from '../services/ai/leadScoring.repository';
 import { LeadStatus, LeadActivityType } from '../generated/prisma';
+import { isLeadSource, LEAD_SOURCES } from '../constants/leadSources';
 
 export class LeadController {
-    /**
-     * Lấy danh sách Leads | GET /api/leads
-     */
+    async getLeadSources(req: Request, res: Response) {
+        try {
+            const data = await leadService.getLeadSources(req.user?.role === 'sale' ? req.user.userId : undefined);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch (error: any) {
+            return res.status(500).json({ success: false, message: 'Không tải được danh mục nguồn lead.' });
+        }
+    }
+
+    async exportScoringDataset(req: Request, res: Response) {
+        try {
+            const dataset = await leadScoringRepository.exportDataset();
+            res.setHeader('Cache-Control', 'no-store');
+            return res.attachment('lead-scoring-snapshots.json').json(dataset);
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+        }
+    }
     async getLeads(req: Request, res: Response) {
         try {
-            // Lấy parameters từ query string
             const {
                 page,
                 limit,
                 status,
                 source,
                 assigned_to,
+                course_id,
+                needs_care,
                 date_from,
                 date_to,
                 search,
@@ -25,12 +44,13 @@ export class LeadController {
 
             const isSale = req.user?.role === 'sale';
             const currentUserId = req.user?.userId;
-            // Typecasting & Calling Service
             const result = await leadService.getLeads({
                 page: page ? parseInt(page as string, 10) : 1,
                 limit: limit ? parseInt(limit as string, 10) : 10,
                 status: status as LeadStatus,
                 source: source as string,
+                course_id: course_id ? Number(course_id) : undefined,
+                needs_care: needs_care === 'true',
                 assigned_to: isSale ? currentUserId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
                 date_from: date_from as string,
                 date_to: date_to as string,
@@ -39,7 +59,6 @@ export class LeadController {
                 sort_dir: sort_dir === 'asc' ? 'asc' : 'desc'
             });
 
-            // Format API Output đúng chuẩn RESTful cho Extensible FE
             return res.status(200).json({
                 success: true,
                 data: result.data,
@@ -57,14 +76,10 @@ export class LeadController {
         }
     }
 
-    /**
-     * Lấy chi tiết 1 Lead | GET /api/leads/:id
-     */
     async getLeadById(req: Request, res: Response) {
         try {
             const { id } = req.params;
 
-            // Validate ID hợp lệ
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -101,15 +116,11 @@ export class LeadController {
         }
     }
 
-    /**
-     * Lấy danh sách lịch sử tương tác của 1 Lead | GET /api/leads/:id/activities
-     */
     async getLeadActivities(req: Request, res: Response) {
         try {
             const { id } = req.params;
             const { page, limit } = req.query;
 
-            // Validate ID hợp lệ
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -159,17 +170,11 @@ export class LeadController {
         }
     }
 
-    /**
-     * Tạo mới Activity cho Lead | POST /api/leads/:id/activities
-     * Body: { type, content, engagement_status }
-     * Sau khi insert → Fire-and-forget AI Scoring
-     */
     async createLeadActivity(req: Request, res: Response) {
         try {
             const { id } = req.params;
             const { type, content, engagement_status } = req.body;
 
-            // Validate Lead ID
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -177,7 +182,6 @@ export class LeadController {
                 });
             }
 
-            // Kiểm tra lead tồn tại và quyền ghi nhận của Sale
             const lead = await leadService.getLeadById(Number(id));
             if (!lead) {
                 return res.status(404).json({
@@ -192,7 +196,6 @@ export class LeadController {
                 });
             }
 
-            // Validate type bắt buộc & thuộc enum cho phép
             const allowedTypes: LeadActivityType[] = ['call', 'email', 'sms', 'meeting', 'note', 'status_change'];
             if (!type || !allowedTypes.includes(type as LeadActivityType)) {
                 return res.status(400).json({
@@ -225,17 +228,12 @@ export class LeadController {
         }
     }
 
-    /**
-     * Tạo Lead mới | POST /api/leads
-     */
     async createLead(req: Request, res: Response) {
         try {
             const { full_name, phone, email, source, occupation, study_purpose, course_id } = req.body;
-            const allowedSources = ['facebook', 'google_ads', 'website_organic', 'tiktok', 'referral', 'other'];
             const allowedOccupations = ['student_y1_y2', 'student_y3_y4', 'working_professional'];
             const allowedStudyPurposes = ['study_abroad', 'pass_exam', 'career_advancement'];
 
-            // Basic Validation
             if (!full_name || typeof full_name !== 'string' || full_name.trim() === '') {
                 return res.status(400).json({
                     success: false,
@@ -249,10 +247,10 @@ export class LeadController {
                     message: 'Validation Error: phone là bắt buộc.'
                 });
             }
-            if (!source || !allowedSources.includes(source)) {
+            if (!isLeadSource(source)) {
                 return res.status(400).json({
                     success: false,
-                    message: `Validation Error: source phải thuộc [${allowedSources.join(', ')}].`
+                    message: `Validation Error: source phải thuộc [${LEAD_SOURCES.map(item => item.value).join(', ')}].`
                 });
             }
             if (!occupation || !allowedOccupations.includes(occupation)) {
@@ -284,7 +282,6 @@ export class LeadController {
                 course_id: course_id ? Number(course_id) : undefined
             });
 
-            // Status 201: Created
             return res.status(201).json({
                 success: true,
                 data: newLead
@@ -299,14 +296,10 @@ export class LeadController {
         }
     }
 
-    /**
-     * Cập nhật Lead | PUT /api/leads/:id
-     */
     async updateLead(req: Request, res: Response) {
         try {
             const { id } = req.params;
 
-            // Validate ID
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -314,7 +307,6 @@ export class LeadController {
                 });
             }
 
-            // Kiểm tra lead tồn tại và quyền chỉnh sửa của Sale
             const lead = await leadService.getLeadById(Number(id));
             if (!lead) {
                 return res.status(404).json({
@@ -331,12 +323,11 @@ export class LeadController {
                 });
             }
 
-            // Chỉ destructure những field được phép update theo y/c
             const { status, assigned_to, notes, occupation, study_purpose, source, course_id, lost_reason } = req.body;
 
             const updatedLead = await leadService.updateLead(Number(id), {
                 status,
-                // Sale không được tự đổi assigned_to, chỉ Admin mới được điều chuyển
+                // Sales users cannot reassign a lead.
                 assigned_to: isSale ? undefined : assigned_to,
                 notes,
                 occupation,
@@ -352,25 +343,25 @@ export class LeadController {
             });
         } catch (error: any) {
             console.error('[LeadController] updateLead error:', error);
-            return res.status(500).json({
+            return res.status(error.statusCode || 500).json({
                 success: false,
-                message: 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
+                message: error.statusCode === 400 ? error.message : 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
                 error: error.message
             });
         }
     }
 
-    /**
-     * Báo cáo Phễu bán hàng | GET /api/leads/funnel
-     */
     async getLeadFunnel(req: Request, res: Response) {
         try {
-            const { assigned_to, source, course_id, date_from, date_to } = req.query;
+            const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care } = req.query;
             const isSale = req.user?.role === 'sale';
             const funnel = await leadService.getLeadFunnel({
                 assigned_to: isSale ? req.user?.userId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
                 source: source as string,
                 course_id: course_id ? parseInt(course_id as string, 10) : undefined,
+                status: status as LeadStatus,
+                search: search as string,
+                needs_care: needs_care === 'true',
                 date_from: date_from as string,
                 date_to: date_to as string,
             });
@@ -389,28 +380,10 @@ export class LeadController {
         }
     }
 
-    /**
-     * Xóa Lead | DELETE /api/leads/:id
-     * - Chỉ Admin / Sale mới được xóa.
-     * - Tự động xóa chùm (Cascade) Activity và điểm AI.
-     */
     async deleteLead(req: Request, res: Response) {
         try {
             const { id } = req.params;
 
-            // Simulating Role extraction from HTTP Header (vì chưa có Middleware Auth đầy đủ)
-            // Header VD trong Postman/Apidog: 'x-role': 'admin' hoặc 'sale'
-            //const userRole = req.header('x-role');
-            // const userRole = (req as any).user?.role;
-
-            // if (!userRole || !['admin', 'sale'].includes(userRole)) {
-            //     return res.status(403).json({
-            //         success: false,
-            //         message: 'Forbidden: Bạn phải là (admin/sale) mới có quyền xóa Lead này.'
-            //     });
-            // }
-
-            // Validate ID
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -434,8 +407,6 @@ export class LeadController {
         } catch (error: any) {
             console.error('[LeadController] deleteLead error:', error);
 
-            // Fallback Foreign Key Exception: Nếu Lead đã join vào bảng Học Viên (Student)
-            // thì Prisma sẽ quăng lỗi chặn xoá do vi phạm khóa ngoại.
             if (error.code === 'P2003') {
                 return res.status(400).json({
                     success: false,
@@ -451,14 +422,10 @@ export class LeadController {
         }
     }
 
-    /**
-     * Trigger Chấm điểm AI Thủ Công | POST /api/leads/:id/score
-     */
     async scoreLeadManually(req: Request, res: Response) {
         try {
             const { id } = req.params;
 
-            // Validate ID
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -466,7 +433,6 @@ export class LeadController {
                 });
             }
 
-            // Kiểm tra quyền chấm điểm của Sale
             const lead = await leadService.getLeadById(Number(id));
             if (!lead) {
                 return res.status(404).json({
@@ -481,11 +447,10 @@ export class LeadController {
                 });
             }
 
-            // Gọi hàm scoreLead (đã bao bọc Try/Catch cực kỳ kín kẽ bên trong)
             const result = await leadScoringService.scoreLead(Number(id));
 
             if (!result.success) {
-                return res.status(400).json({
+                return res.status(result.statusCode || 500).json({
                     success: false,
                     message: result.error || 'Có lỗi xảy ra khi chấm điểm Lead.'
                 });
@@ -493,8 +458,10 @@ export class LeadController {
 
             return res.status(200).json({
                 success: true,
-                message: 'Đã cập nhật thang điểm AI thành công.',
-                data: result.data // Chứa đối tượng LeadAiScore
+                message: result.message,
+                data: result.data,
+                care: result.care,
+                model_status: result.model_status,
             });
         } catch (error: any) {
             console.error('[LeadController] scoreLeadManually error:', error);
@@ -506,18 +473,11 @@ export class LeadController {
         }
     }
 
-    /**
-     * Convert Lead → Student | POST /api/leads/:id/convert
-     * Body (optional): { email }
-     * - Dùng prisma.$transaction() → đảm bảo atomic (tất cả thành công hoặc rollback hết)
-     * - Trả về 201 kèm Student record vừa tạo
-     */
     async convertLead(req: Request, res: Response) {
         try {
             const { id } = req.params;
             const { email } = req.body;
 
-            // Validate Lead ID
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
                     success: false,
@@ -525,7 +485,6 @@ export class LeadController {
                 });
             }
 
-            // Kiểm tra quyền convert của Sale
             const lead = await leadService.getLeadById(Number(id));
             if (!lead) {
                 return res.status(404).json({
@@ -540,7 +499,6 @@ export class LeadController {
                 });
             }
 
-            // Validate format email nếu được truyền vào
             if (email !== undefined && email !== null) {
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 if (typeof email !== 'string' || !emailRegex.test(email.trim())) {
@@ -562,7 +520,6 @@ export class LeadController {
         } catch (error: any) {
             console.error('[LeadController] convertLead error:', error);
 
-            // Bắt lỗi có statusCode tuỳ chỉnh từ Service (400 / 404 / 409)
             if (error.statusCode) {
                 return res.status(error.statusCode).json({
                     success: false,
@@ -570,7 +527,6 @@ export class LeadController {
                 });
             }
 
-            // Bắt Prisma Unique Constraint (P2002): Email đã tồn tại trong bảng users
             if (error.code === 'P2002') {
                 return res.status(409).json({
                     success: false,

@@ -11,9 +11,19 @@ export interface FunnelAggregateRow {
     weightedSum: number;
     scoreSum: number;
     staleCount: number;
+    unassignedCount?: number;
 }
 
 export class LeadRepository {
+    async getSourceValues(assignedTo?: number) {
+        return prisma.lead.findMany({
+            where: { lead_source: { not: null }, ...(assignedTo !== undefined ? { assigned_to: assignedTo } : {}) },
+            select: { lead_source: true },
+            distinct: ['lead_source'],
+            orderBy: { lead_source: 'asc' },
+        });
+    }
+
     private buildInvoiceNo() {
         const now = new Date();
         const yyyy = now.getFullYear();
@@ -91,7 +101,7 @@ export class LeadRepository {
             where: { lead_id: leadId },
             skip,
             take,
-            orderBy: { createdAt: 'desc' },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
             include: {
                 user: {
                     select: {
@@ -125,16 +135,6 @@ export class LeadRepository {
         });
     }
 
-    async updateLastContacted(leadId: number) {
-        return await prisma.lead.update({
-            where: { id: leadId },
-            data: { last_contacted: new Date() }
-        });
-    }
-
-    /**
-     * Lấy thông tin Lead đầy đủ để chuẩn bị Convert (có email, status, student)
-     */
     async findLeadForConvert(id: number) {
         return await prisma.lead.findUnique({
             where: { id },
@@ -146,20 +146,11 @@ export class LeadRepository {
                 course_id: true,
                 course: { select: { id: true, name: true, fee: true } },
                 status: true,
-                student: { select: { id: true } } // Kiểm tra đã convert trước đó chưa
+                student: { select: { id: true } }
             }
         });
     }
 
-    /**
-     * Thực thi Convert Lead → Student trong một Atomic Transaction.
-     * Nếu bất kỳ bước nào thất bại → Prisma tự động ROLLBACK toàn bộ.
-     *
-     * Các bước bên trong Transaction:
-     *   1. Tạo User account với role student
-     *   2. Tạo Student record (link user_id + lead_id)
-     *   3. Update Lead status → enrolled
-     */
     async convertLeadToStudent(params: {
         lead_id: number;
         full_name: string;
@@ -169,8 +160,8 @@ export class LeadRepository {
         course_id?: number | null;
         course?: { id: number; name: string; fee: Prisma.Decimal | null } | null;
     }) {
+        // Account, student, lead status and invoice must commit together.
         return await withTenantTx(async (tx) => {
-            // BƯỚC 1: Tạo User account với role student
             const newUser = await tx.user.create({
                 data: {
                     email: params.email,
@@ -182,7 +173,6 @@ export class LeadRepository {
                 }
             });
 
-            // BƯỚC 2: Tạo Student record (link user_id + lead_id)
             const newStudent = await tx.student.create({
                 data: {
                     user_id: newUser.id,
@@ -203,7 +193,6 @@ export class LeadRepository {
                 }
             });
 
-            // BƯỚC 3: Update Lead status → enrolled
             await tx.lead.update({
                 where: { id: params.lead_id },
                 data: { status: LeadStatus.enrolled }
@@ -236,10 +225,6 @@ export class LeadRepository {
         });
     }
 
-    /**
-     * Gom phễu bán hàng ngay trong DB: mỗi dòng = một cặp (status, nguồn).
-     * Thay cho việc tải toàn bộ lead của tenant vào Node.
-     */
     async getFunnelAggregates(filters: {
         assigned_to?: number;
         source?: string;
@@ -247,6 +232,9 @@ export class LeadRepository {
         date_from?: Date;
         date_to?: Date;
         staleBefore: Date;
+        status?: LeadStatus;
+        search?: string;
+        needs_care?: boolean;
     }): Promise<FunnelAggregateRow[]> {
         const tenantId = currentTenantId();
         const conds: Prisma.Sql[] = [Prisma.sql`l.tenant_id = ${tenantId}`];
@@ -255,8 +243,14 @@ export class LeadRepository {
         if (filters.course_id) conds.push(Prisma.sql`l.course_id = ${filters.course_id}`);
         if (filters.date_from) conds.push(Prisma.sql`l."createdAt" >= ${filters.date_from}`);
         if (filters.date_to) conds.push(Prisma.sql`l."createdAt" <= ${filters.date_to}`);
+        if (filters.status) conds.push(Prisma.sql`l.status::text = ${filters.status}`);
+        if (filters.search) {
+            const pattern = `%${filters.search}%`;
+            conds.push(Prisma.sql`(l.full_name ILIKE ${pattern} OR l.phone ILIKE ${pattern} OR l.email ILIKE ${pattern})`);
+        }
+        if (filters.needs_care) conds.push(Prisma.sql`(l.status IN ('new', 'contacted', 'interested', 'trial') AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore}))`);
 
-        // Quy đổi điểm AI: giá trị > 1 là phần trăm, <= 1 là xác suất (giữ nguyên quy ước cũ)
+        // Scores are percentages on 0..100, including sub-one-percent values.
         const rows = await withTenantTx((tx) =>
             tx.$queryRaw<
                 {
@@ -267,16 +261,18 @@ export class LeadRepository {
                     weighted_sum: number | null;
                     score_sum: number | null;
                     stale_cnt: bigint;
+                    unassigned_cnt: bigint;
                 }[]
             >(Prisma.sql`
                 SELECT l.status::text AS status,
                        l.lead_source AS source,
                        count(*) AS cnt,
                        COALESCE(sum(c.fee), 0) AS fee_sum,
-                       COALESCE(sum(COALESCE(c.fee, 0)::float8 * (CASE WHEN COALESCE(a.probability_score, 0) > 1 THEN a.probability_score / 100 ELSE COALESCE(a.probability_score, 0) END)), 0) AS weighted_sum,
-                       COALESCE(sum(CASE WHEN COALESCE(a.probability_score, 0) <= 1 THEN COALESCE(a.probability_score, 0) * 100 ELSE a.probability_score END), 0) AS score_sum,
+                       COALESCE(sum(COALESCE(c.fee, 0)::float8 * COALESCE(a.probability_score, 0) / 100), 0) AS weighted_sum,
+                       COALESCE(sum(a.probability_score), 0) AS score_sum,
                        count(*) FILTER (WHERE l.status IN ('new', 'contacted', 'interested', 'trial')
-                                          AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore})) AS stale_cnt
+                                          AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore})) AS stale_cnt,
+                       count(*) FILTER (WHERE l.assigned_to IS NULL AND l.status IN ('new', 'contacted', 'interested', 'trial')) AS unassigned_cnt
                 FROM leads l
                 LEFT JOIN courses c ON c.id = l.course_id
                 LEFT JOIN lead_ai_scores a ON a.lead_id = l.id
@@ -293,6 +289,7 @@ export class LeadRepository {
             weightedSum: Number(r.weighted_sum ?? 0),
             scoreSum: Number(r.score_sum ?? 0),
             staleCount: Number(r.stale_cnt),
+            unassignedCount: Number(r.unassigned_cnt ?? 0),
         }));
     }
 
