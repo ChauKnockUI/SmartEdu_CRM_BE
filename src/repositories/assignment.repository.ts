@@ -8,7 +8,7 @@ export class AssignmentRepository {
       select: {
         id: true,
         teacher: { select: { user_id: true } },
-        classEnrollments: { select: { student_id: true } },
+        classEnrollments: { where: { status: 'active' }, select: { student_id: true } },
       },
     });
   }

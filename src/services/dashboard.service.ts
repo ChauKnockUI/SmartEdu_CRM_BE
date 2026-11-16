@@ -2,6 +2,11 @@ import { Prisma } from '../generated/prisma';
 import { prisma, withTenantTx } from '../database/db';
 import { currentTenantId } from '../database/tenant-context';
 import { invoiceService } from './invoice.service';
+import { LEAD_ACTIVE_STATUSES, leadCareCutoff, leadNeedsCareWhere, LEAD_ACTIVITY_LABELS } from '../constants/leadWorkflow';
+import { LEAD_SOURCES } from '../constants/leadSources';
+import { dropoutRiskRepository, dropoutAttention } from '../repositories/dropoutRisk.repository';
+import { invoiceBalance, invoiceRemainingSql, moneyCents } from '../utils/billing';
+import { presentLeadActivity } from '../utils/leadEmail';
 
 type Role = 'admin' | 'sale' | 'teacher' | 'student';
 type AlertType = 'info' | 'warning' | 'error';
@@ -20,6 +25,18 @@ const addDays = (date: Date, days: number) => {
 };
 
 const monthLabel = (date: Date) => `T${date.getMonth() + 1}/${date.getFullYear()}`;
+const leadSourceLabel = (source: string | null) => LEAD_SOURCES.find(item => item.value === source)?.label || source || 'Khác';
+
+const leadMonthRange = (now: Date) => {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit' }).formatToParts(now);
+  const year = Number(parts.find(part => part.type === 'year')!.value);
+  const month = Number(parts.find(part => part.type === 'month')!.value);
+  const start = new Date(Date.UTC(year, month - 1, 1) - 7 * 3_600_000);
+  const end = new Date(Date.UTC(year, month, 1) - 7 * 3_600_000);
+  const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return { start, end, link: `/crm/leads?date_from=${firstDay}&date_to=${lastDay}` };
+};
 
 /** `count` tháng gần nhất, tháng hiện tại ở cuối; mốc theo giờ địa phương của server như trước. */
 const lastMonths = (now: Date, count: number) =>
@@ -34,7 +51,7 @@ interface ActivityView {
   content: string | null;
   createdAt: Date;
   user: { full_name: string } | null;
-  lead: { full_name: string };
+  lead: { id: number; full_name: string };
 }
 
 interface AdminOverviewRow {
@@ -43,7 +60,6 @@ interface AdminOverviewRow {
   converted_leads: number;
   stale_leads: number;
   active_students: number;
-  high_risk_students: number;
   full_classes: number;
   debts: number;
   /** Doanh thu từng tháng, cùng thứ tự với `lastMonths`. */
@@ -54,15 +70,21 @@ interface AdminOverviewRow {
 
 const activityInclude = {
   user: { select: { full_name: true } },
-  lead: { select: { full_name: true } },
+  lead: { select: { id: true, full_name: true } },
 } satisfies Prisma.LeadActivityInclude;
 
-const mapActivity = (activity: ActivityView) => ({
-  id: String(activity.id),
-  actor: activity.user?.full_name || 'System',
-  text: `${activity.type} lead ${activity.lead.full_name}${activity.content ? ` - ${activity.content}` : ''}`,
-  time: activity.createdAt,
-});
+const mapActivity = (activity: ActivityView) => {
+  const visible = presentLeadActivity(activity);
+  const content = visible.email_delivery === 'accepted'
+    ? visible.content?.split('\n')[1] : visible.content;
+  return {
+    id: String(activity.id),
+    actor: activity.user?.full_name || 'Hệ thống',
+    text: `${LEAD_ACTIVITY_LABELS[activity.type as keyof typeof LEAD_ACTIVITY_LABELS] || activity.type} · ${activity.lead.full_name}${content ? ` - ${content}` : ''}`,
+    time: activity.createdAt,
+    action: `/crm/leads/${activity.lead.id}`,
+  };
+};
 
 const emptyOverview = (role: Role) => ({
   role,
@@ -77,7 +99,7 @@ class DashboardService {
   async getOverview(userId: number, role: Role) {
     switch (role) {
       case 'admin':
-        return this.getAdminOverview();
+        return this.getAdminOverview(userId);
       case 'sale':
         return this.getSaleOverview(userId);
       case 'teacher':
@@ -90,15 +112,17 @@ class DashboardService {
   }
 
   /**
-   * Cả trang trong MỘT câu SQL, chạy trong transaction gắn tenant. Mỗi truy vấn đi qua `prisma` tự bọc
+   * Số liệu CRM/tài chính gộp trong một câu SQL, chạy trong transaction gắn tenant. Cảnh báo Dropout
+   * dùng nguồn đọc chung theo từng học viên/lớp. Mỗi truy vấn đi qua `prisma` tự bọc
    * BEGIN + set_config + COMMIT (mỗi câu là một lượt đi về DB), nên ~17 truy vấn riêng lẻ (74 câu SQL)
    * được gộp lại. Điều kiện `tenant_id` viết rõ để planner dùng index; RLS vẫn là lớp bảo vệ chính.
    */
-  private async getAdminOverview() {
+  private async getAdminOverview(userId: number) {
     const now = new Date();
     const months = lastMonths(now, 6);
     const thisMonth = months[months.length - 1];
-    const staleBefore = addDays(now, -3);
+    const staleBefore = leadCareCutoff(now);
+    const leadMonth = leadMonthRange(now);
     const tenantId = currentTenantId();
 
     const monthSums = months.map(
@@ -106,7 +130,7 @@ class DashboardService {
     );
     const monthColumns = Prisma.join(months.map((_, i) => Prisma.raw(`m${i}`)));
 
-    const row = await withTenantTx(
+    const [row, snapshots] = await Promise.all([withTenantTx(
       async (tx) => {
         const [row] = await tx.$queryRaw<AdminOverviewRow[]>`
           WITH rev AS (
@@ -114,23 +138,21 @@ class DashboardService {
             WHERE tenant_id = ${tenantId} AND paid_at >= ${months[0].start} AND paid_at < ${thisMonth.end}
           )
           SELECT
-            (SELECT count(*) FROM leads WHERE tenant_id = ${tenantId} AND status = 'new'
-               AND "createdAt" >= ${thisMonth.start} AND "createdAt" < ${thisMonth.end})::int AS new_leads,
+            (SELECT count(*) FROM leads WHERE tenant_id = ${tenantId}
+               AND "createdAt" >= ${leadMonth.start} AND "createdAt" < ${leadMonth.end})::int AS new_leads,
             (SELECT count(*) FROM leads WHERE tenant_id = ${tenantId})::int AS total_leads,
             (SELECT count(*) FROM leads WHERE tenant_id = ${tenantId} AND status = 'enrolled')::int AS converted_leads,
             (SELECT count(*) FROM leads WHERE tenant_id = ${tenantId}
-               AND status IN ('new', 'contacted', 'interested', 'trial')
+               AND status::text IN (${Prisma.join(LEAD_ACTIVE_STATUSES)})
                AND (last_contacted IS NULL OR last_contacted < ${staleBefore}))::int AS stale_leads,
             (SELECT count(*) FROM students WHERE tenant_id = ${tenantId} AND status = 'active')::int AS active_students,
-            (SELECT count(*) FROM students WHERE tenant_id = ${tenantId} AND dropout_risk_level = 'high')::int AS high_risk_students,
             (SELECT count(*) FROM classes c
                WHERE c.tenant_id = ${tenantId} AND c.max_students > 0 AND c.status IN ('ongoing', 'upcoming')
                  AND (SELECT count(*) FROM class_enrollments e WHERE e.class_id = c.id AND e.status = 'active')
                      >= 0.8 * c.max_students)::int AS full_classes,
             (SELECT count(*) FROM invoices i
-               WHERE i.tenant_id = ${tenantId} AND i.status IN ('pending', 'partial', 'overdue')
-                 AND GREATEST(COALESCE(i.total_amount, 0) - COALESCE(i.discount_amount, 0), 0)
-                     - COALESCE((SELECT sum(p.amount) FROM payment_transactions p WHERE p.invoice_id = i.id), 0) > 0
+               WHERE i.tenant_id = ${tenantId} AND i.status NOT IN ('cancelled', 'refunded')
+                 AND ${invoiceRemainingSql(tenantId, now)} > 0
             )::int AS debts,
             (SELECT json_build_array(${monthColumns}) FROM rev) AS revenue,
             (SELECT COALESCE(json_agg(json_build_object('lead_source', g.lead_source, 'value', g.value) ORDER BY g.named DESC), '[]'::json)
@@ -139,7 +161,7 @@ class DashboardService {
             (SELECT COALESCE(json_agg(json_build_object(
                       'id', a.id, 'type', a.type, 'content', a.content, 'createdAt', a."createdAt",
                       'user', CASE WHEN u.id IS NULL THEN NULL ELSE json_build_object('full_name', u.full_name) END,
-                      'lead', json_build_object('full_name', l.full_name)
+                      'lead', json_build_object('id', l.id, 'full_name', l.full_name)
                     ) ORDER BY a."createdAt" DESC), '[]'::json)
                FROM (SELECT id, type, content, "createdAt", user_id, lead_id FROM lead_activities
                      WHERE tenant_id = ${tenantId} ORDER BY "createdAt" DESC LIMIT 5) a
@@ -149,27 +171,29 @@ class DashboardService {
       },
       // Chờ được kết nối lâu hơn mặc định 2s khi FE bắn nhiều request cùng lúc lúc tải trang.
       { maxWait: 10_000, timeout: 15_000 }
-    );
+    ), dropoutRiskRepository.getSnapshots({ userId, role: 'admin' })]);
 
     const revenueLast6Months = months.map((m, i) => ({ month: m.month, revenue: toNumber(row.revenue[i]) }));
+    const highRiskCount = snapshots.filter(item => item.risk_level === 'high').length;
 
     return {
       role: 'admin' as const,
+      links: { newLeads: leadMonth.link, conversionRate: '/crm/leads?tab=funnel' },
       kpis: {
         newLeads: row.new_leads,
-        conversionRate: row.total_leads ? Number(((row.converted_leads / row.total_leads) * 100).toFixed(1)) : 0,
+        conversionRate: row.total_leads ? Math.round(row.converted_leads / row.total_leads * 1000) / 10 : 0,
         activeStudents: row.active_students,
         monthRevenue: revenueLast6Months[revenueLast6Months.length - 1].revenue,
       },
       charts: {
         revenueLast6Months,
-        leadSources: row.sources.map((s) => ({ name: s.lead_source || 'Khác', value: s.value })),
+        leadSources: row.sources.map((s) => ({ name: leadSourceLabel(s.lead_source), value: s.value })),
       },
       alerts: [
-        { id: 'risk-students', type: 'warning' as AlertType, title: `${row.high_risk_students} học viên có nguy cơ nghỉ học cao`, action: '/ai/predictions' },
+        { id: 'risk-students', type: 'warning' as AlertType, title: `${highRiskCount} trường hợp cần liên hệ theo lớp`, action: '/ai/predictions?risk_level=high' },
         { id: 'debts', type: 'error' as AlertType, title: `${row.debts} học phí quá hạn/chưa thu`, action: '/finance/debts' },
         { id: 'full-classes', type: 'info' as AlertType, title: `${row.full_classes} lớp sắp đầy (>80% sĩ số)`, action: '/lms/classes' },
-        { id: 'stale-leads', type: 'warning' as AlertType, title: `${row.stale_leads} leads chưa follow-up >3 ngày`, action: '/crm/leads' },
+        { id: 'stale-leads', type: 'warning' as AlertType, title: `${row.stale_leads} lead cần chăm sóc: chưa liên hệ hoặc đã quá 3 ngày`, action: '/crm/leads?needs_care=true' },
       ],
       activities: row.activities.map((a) => mapActivity({ ...a, createdAt: new Date(a.createdAt) })),
       lists: {},
@@ -178,68 +202,63 @@ class DashboardService {
 
   private async getSaleOverview(userId: number) {
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    const todayStart = startOfDay(now);
-    const todayEnd = endOfDay(now);
-
-    const [myLeads, converted, followUpToday, debts, activities] = await Promise.all([
+    const careWhere: Prisma.LeadWhereInput = { assigned_to: userId, ...leadNeedsCareWhere(now) };
+    const [myLeads, converted, needsCare, newLeads, careLeads, debts, activities] = await Promise.all([
+      prisma.lead.count({ where: { assigned_to: userId } }),
+      prisma.lead.count({ where: { assigned_to: userId, status: 'enrolled' } }),
+      prisma.lead.count({ where: careWhere }),
       prisma.lead.findMany({
-        where: { assigned_to: userId },
-        include: { aiScore: true },
-        orderBy: [{ aiScore: { probability_score: 'desc' } }, { createdAt: 'desc' }],
-        take: 20,
+        where: { assigned_to: userId, status: 'new' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: 5,
       }),
-      prisma.lead.count({
-        where: { assigned_to: userId, status: 'enrolled', updatedAt: { gte: monthStart, lt: nextMonthStart } },
+      prisma.lead.findMany({
+        where: careWhere,
+        orderBy: [{ last_contacted: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }, { id: 'asc' }],
+        take: 5,
       }),
-      prisma.lead.count({
-        where: {
-          assigned_to: userId,
-          status: { in: ['new', 'contacted', 'interested', 'trial'] },
-          OR: [
-            { last_contacted: { gte: todayStart, lte: todayEnd } },
-            { last_contacted: null },
-            { last_contacted: { lt: addDays(now, -3) } },
-          ],
-        },
-      }),
-      invoiceService.getDebts(),
+      invoiceService.getDebts({ userId, role: 'sale' }),
       this.getRecentActivities(userId),
     ]);
 
-    const totalDebt = debts.reduce((sum, item: any) => sum + (item.debt_amount || 0), 0);
-    const priorityLeads = myLeads.slice(0, 5).map((lead) => ({
+    const totalDebt = debts.reduce((sum, item: any) => sum + moneyCents(item.debt_amount), 0) / 100;
+    const priorityLeads = newLeads.map((lead) => ({
       id: lead.id,
       name: lead.full_name,
       phone: lead.phone,
-      source: lead.lead_source,
-      score: Math.round((lead.aiScore?.probability_score || 0) * 100),
+      source: leadSourceLabel(lead.lead_source),
     }));
 
     return {
       role: 'sale' as const,
+      links: { myLeads: '/crm/leads', needsCare: '/crm/leads?needs_care=true', conversionRate: '/crm/leads?tab=funnel', debtToCollect: '/finance/debts' },
       kpis: {
-        myLeads: myLeads.length,
-        followUpToday,
-        conversionRate: myLeads.length ? Number(((converted / myLeads.length) * 100).toFixed(1)) : 0,
+        myLeads,
+        needsCare,
+        conversionRate: myLeads ? Math.round(converted / myLeads * 1000) / 10 : 0,
         debtToCollect: totalDebt,
+        debtCases: debts.length,
       },
       charts: {},
       alerts: [],
       activities,
       lists: {
         priorityLeads,
-        followUps: priorityLeads.map((lead) => ({
+        careLeads: careLeads.map((lead) => ({
           id: lead.id,
-          time: lead.score >= 80 ? '09:30' : '14:00',
-          title: `Follow-up ${lead.name}${lead.score ? ` (Score ${lead.score})` : ''}`,
+          name: lead.full_name,
+          reason: lead.last_contacted ? 'Đã quá 3 ngày chưa liên hệ' : 'Chưa từng liên hệ',
+          last_contacted: lead.last_contacted,
         })),
         paymentIssues: debts.slice(0, 5).map((item: any) => ({
           id: item.invoice_id,
+          invoiceNo: item.invoice_no,
           name: item.student?.full_name,
+          phone: item.student?.phone,
+          status: item.collection_status,
           amount: item.debt_amount,
-          overdue: item.status === 'overdue' && item.due_date ? Math.max(0, Math.ceil((now.getTime() - new Date(item.due_date).getTime()) / 86400000)) : 0,
+          overdue: item.days_overdue,
+          action: `/finance/payments?invoice_id=${item.invoice_id}`,
         })),
         upsell: [],
       },
@@ -255,7 +274,7 @@ class DashboardService {
     const teacher = await prisma.teacher.findUnique({ where: { user_id: userId } });
     if (!teacher) return emptyOverview('teacher');
 
-    const [classes, todaySchedules, weekSchedules, attendances, attentionStudents, materials] = await Promise.all([
+    const [classes, todaySchedules, weekSchedules, attendances, snapshots, materials] = await Promise.all([
       prisma.class.findMany({
         where: { teacher_id: teacher.id, status: { in: ['ongoing', 'upcoming'] } },
         include: { classEnrollments: { where: { status: 'active' } } },
@@ -274,14 +293,7 @@ class DashboardService {
         where: { schedule: { teacher_id: teacher.id } },
         select: { status: true },
       }),
-      prisma.student.findMany({
-        where: {
-          classEnrollments: { some: { class: { teacher_id: teacher.id }, status: 'active' } },
-          OR: [{ dropout_risk_level: 'high' }, { dropout_risk_level: 'medium' }],
-        },
-        orderBy: [{ dropout_risk: 'desc' }, { updatedAt: 'desc' }],
-        take: 6,
-      }),
+      dropoutRiskRepository.getSnapshots({ userId, role: 'teacher' }),
       prisma.class_materials.findMany({
         where: { classes: { teacher_id: teacher.id } },
         orderBy: { created_at: 'desc' },
@@ -292,14 +304,17 @@ class DashboardService {
     const studentIds = new Set(classes.flatMap((item) => item.classEnrollments.map((enrollment) => enrollment.student_id)));
     const presentCount = attendances.filter((item) => item.status === 'present' || item.status === 'late').length;
     const attendanceRate = attendances.length ? Number(((presentCount / attendances.length) * 100).toFixed(1)) : 0;
+    const attentionStudents = dropoutAttention(snapshots);
 
     return {
       role: 'teacher' as const,
+      links: { dropoutAttention: '/ai/predictions?risk_level=attention' },
       kpis: {
         activeClasses: classes.length,
         students: studentIds.size,
         sessionsThisWeek: weekSchedules.length,
         attendanceRate,
+        supportCases: attentionStudents.length,
       },
       charts: {},
       alerts: [],
@@ -307,11 +322,9 @@ class DashboardService {
       lists: {
         todayClasses: todaySchedules.map((schedule) => this.mapSchedule(schedule)),
         upcomingSessions: weekSchedules.map((schedule) => this.mapSchedule(schedule)),
-        attentionStudents: attentionStudents.map((student) => ({
-          id: student.id,
-          name: student.full_name,
-          issue: student.dropout_risk_level ? `Churn risk: ${Math.round((student.dropout_risk || 0) * 100)}%` : 'Cần theo dõi tiến độ',
-          severity: student.dropout_risk_level || 'low',
+        attentionStudents: attentionStudents.slice(0, 6).map((item) => ({
+          id: `${item.class_id}:${item.student_id}`, name: item.full_name, className: item.class_name, risk: item,
+          action: `/lms/students/${item.student_id}?tab=classes&risk_class=${item.class_id}`,
         })),
         materials: materials.map((item) => ({
           id: item.id,
@@ -381,16 +394,16 @@ class DashboardService {
           totalTarget: 50,
         },
         invoices: invoices.map((invoice) => {
-          const paid = invoice.payments.reduce((sum, payment) => sum + toNumber(payment.amount), 0);
-          const total = toNumber(invoice.total_amount) - toNumber(invoice.discount_amount);
+          const balance = invoiceBalance(invoice, now);
           return {
             id: invoice.id,
             title: invoice.invoice_no,
             className: invoice.class?.name,
             dueDate: invoice.due_date,
-            amount: total,
-            paidAmount: paid,
-            status: invoice.status,
+            amount: balance.payable_amount,
+            paidAmount: balance.paid_amount,
+            remainingAmount: balance.remaining_amount,
+            status: balance.collection_status,
           };
         }),
         materials: materials.map((item) => ({
@@ -405,7 +418,7 @@ class DashboardService {
 
   private async getRecentActivities(userId: number) {
     const activities = await prisma.leadActivity.findMany({
-      where: { user_id: userId },
+      where: { lead: { assigned_to: userId } },
       include: activityInclude,
       orderBy: { createdAt: 'desc' },
       take: 5,

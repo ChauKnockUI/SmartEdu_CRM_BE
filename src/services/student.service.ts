@@ -2,6 +2,8 @@ import { Prisma, StudentStatus } from '../generated/prisma';
 import { studentRepository } from '../repositories/student.repository';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcryptjs';
+import { studentReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { studentCsv } from '../utils/studentCsv';
 
 export interface GetStudentsQuery {
     page?: number;
@@ -34,11 +36,9 @@ export class StudentService {
         return crypto.randomBytes(length).toString('hex').slice(0, length);
     }
 
-    async getStudents(query: GetStudentsQuery) {
-        const { page = 1, limit = 10, search, status, class_id, has_debt } = query;
-        const skip = (page - 1) * limit;
-
-        const where: Prisma.StudentWhereInput = {};
+    private async listWhere(query: GetStudentsQuery, actor: AcademicActor) {
+        const { search, status, class_id, has_debt } = query;
+        const where: Prisma.StudentWhereInput = { AND: [studentReadScope(actor)] };
 
         if (search) {
             where.OR = [
@@ -54,15 +54,35 @@ export class StudentService {
 
         if (class_id) {
             where.classEnrollments = {
-                some: { class_id }
+                some: { class_id, ...enrollmentReadScope(actor) }
             };
         }
 
-        if (has_debt !== undefined) {
-            where.invoices = has_debt
-                ? { some: { status: { in: ['pending', 'partial', 'overdue'] } } }
-                : { none: { status: { in: ['pending', 'partial', 'overdue'] } } };
+        if (has_debt !== undefined && ['admin', 'sale'].includes(actor.role)) {
+            const debtors = await studentRepository.findStudentIdsWithDebt(actor);
+            const ids = debtors.map(item => item.student_id);
+            where.id = has_debt ? { in: ids } : { notIn: ids };
         }
+        return where;
+    }
+
+    async getStudentFilterOptions(actor: AcademicActor) {
+        return { classes: await studentRepository.getClassOptions(actor) };
+    }
+
+    async exportStudents(query: GetStudentsQuery, actor: AcademicActor) {
+        if (!['admin', 'sale', 'teacher'].includes(actor.role)) {
+            throw Object.assign(new Error('Không có quyền xuất danh sách học viên.'), { statusCode: 403 });
+        }
+        const where = await this.listWhere(query, actor);
+        const students = await studentRepository.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }, actor);
+        return studentCsv(students, actor.role === 'admin' || actor.role === 'sale');
+    }
+
+    async getStudents(query: GetStudentsQuery, actor: AcademicActor) {
+        const { page = 1, limit = 10 } = query;
+        const skip = (page - 1) * limit;
+        const where = await this.listWhere(query, actor);
 
         const [total, students] = await Promise.all([
             studentRepository.count(where),
@@ -70,8 +90,8 @@ export class StudentService {
                 skip,
                 take: limit,
                 where,
-                orderBy: { createdAt: 'desc' }
-            })
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+            }, actor)
         ]);
 
         return {
@@ -85,8 +105,13 @@ export class StudentService {
         };
     }
 
-    async getStudentById(id: number) {
-        return await studentRepository.findById(id);
+    async getStudentById(id: number, actor: AcademicActor) {
+        return await studentRepository.findById(id, actor);
+    }
+
+    async getMyProfile(actor: AcademicActor) {
+        if (actor.role !== 'student') throw Object.assign(new Error('Chỉ học viên được mở hồ sơ cá nhân tại đây.'), { statusCode: 403 });
+        return studentRepository.findByUserId(actor.userId, actor);
     }
 
     async createStudent(data: CreateStudentInput) {

@@ -2,6 +2,7 @@ import { AttendanceStatus } from '../generated/prisma';
 import { attendanceRepository } from '../repositories/attendance.repository';
 import { prisma, withTenantTx } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
+import { assertAttendanceStudents, scheduleReadScope, studentReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
 
 export interface AttendanceInput {
   student_id: number;
@@ -76,6 +77,7 @@ export class AttendanceService {
     }
 
     await withTenantTx(async (tx) => {
+      await assertAttendanceStudents(tx, schedule.class_id, attendances.map(item => item.student_id));
       await tx.schedule.update({
         where: { id: schedule_id },
         data: {
@@ -119,90 +121,25 @@ export class AttendanceService {
     return { success: true };
   }
 
-  async getSessionAttendance(scheduleId: number, userId: number, userRole: string) {
-    const schedule = await prisma.schedule.findUnique({
-      where: { id: scheduleId },
-      include: {
-        class: {
-          select: {
-            id: true,
-            teacher: { select: { user_id: true } }
-          }
-        },
-        teacher: { select: { user_id: true } },
-      }
+  private async assertSessionRead(scheduleId: number, actor: AcademicActor) {
+    const schedule = await prisma.schedule.findFirst({
+      where: { id: scheduleId, AND: [scheduleReadScope(actor)] }, select: { id: true },
     });
+    if (!schedule) throw Object.assign(new Error('Không tìm thấy buổi học trong phạm vi được xem.'), { statusCode: 404 });
+  }
 
-    if (!schedule) {
-      const err = new Error('Không tìm thấy buổi học');
-      (err as any).statusCode = 404;
-      throw err;
-    }
-
-    if (userRole !== 'admin') {
-      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
-      if (userRole === 'teacher' && assignedTeacherUserId !== userId) {
-        const err = new Error('Bạn không có quyền xem buổi học này');
-        (err as any).statusCode = 403;
-        throw err;
-      }
-
-      if (userRole === 'student' && schedule.class?.id) {
-        const student = await prisma.student.findUnique({
-          where: { user_id: userId },
-          select: { id: true },
-        });
-
-        const enrollment = await prisma.classEnrollment.findUnique({
-          where: {
-            class_id_student_id: {
-              class_id: schedule.class.id,
-              student_id: student?.id || 0,
-            },
-          },
-        });
-
-        if (!enrollment) {
-          const err = new Error('Bạn không có quyền xem buổi học này');
-          (err as any).statusCode = 403;
-          throw err;
-        }
-      }
-    }
-
-    return await attendanceRepository.getSessionAttendanceWithMemo(scheduleId);
+  async getSessionAttendance(scheduleId: number, userId: number, userRole: string) {
+    const actor = { userId, role: userRole as AcademicActor['role'] };
+    await this.assertSessionRead(scheduleId, actor);
+    return attendanceRepository.getSessionAttendanceWithMemo(scheduleId,
+      ['admin', 'teacher'].includes(userRole) ? undefined : studentReadScope(actor));
   }
 
   async getAbsenceList(scheduleId: number, userId: number, userRole: string) {
-    const schedule = await prisma.schedule.findUnique({
-      where: { id: scheduleId },
-      include: {
-        class: {
-          select: {
-            id: true,
-            teacher: { select: { user_id: true } }
-          }
-        },
-        teacher: { select: { user_id: true } },
-      }
-    });
-
-    if (!schedule) {
-      const err = new Error('Không tìm thấy buổi học');
-      (err as any).statusCode = 404;
-      throw err;
-    }
-
-    if (userRole !== 'admin') {
-      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
-      if (userRole === 'teacher' && assignedTeacherUserId !== userId) {
-        const err = new Error('Bạn không có quyền xem buổi học này');
-        (err as any).statusCode = 403;
-        throw err;
-      }
-    }
-
-    return await attendanceRepository.getAbsenceList(scheduleId);
+    const actor = { userId, role: userRole as AcademicActor['role'] };
+    await this.assertSessionRead(scheduleId, actor);
+    return attendanceRepository.getAbsenceList(scheduleId,
+      ['admin', 'teacher'].includes(userRole) ? undefined : studentReadScope(actor));
   }
 
   async getStudentAttendanceHistory(
@@ -211,6 +148,11 @@ export class AttendanceService {
     userId: number,
     userRole: string
   ) {
+    const actor = { userId, role: userRole as AcademicActor['role'] };
+    const enrollment = await prisma.classEnrollment.findFirst({ where: {
+      student_id: studentId, class_id: classId, ...enrollmentReadScope(actor),
+    }, select: { id: true } });
+    if (!enrollment) throw Object.assign(new Error('Không có quyền xem lịch sử học viên trong lớp này.'), { statusCode: 403 });
     return await attendanceRepository.getStudentAttendanceHistory(studentId, classId);
   }
 }

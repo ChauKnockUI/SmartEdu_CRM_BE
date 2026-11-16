@@ -2,20 +2,35 @@ import { Request, Response } from 'express';
 import { classService } from '../services/class.service';
 import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { ClassStatus } from '../generated/prisma';
+import { dropoutRiskRepository } from '../repositories/dropoutRisk.repository';
+import { classListQuery } from '../utils/classListQuery';
 
 export class ClassController {
+    async getFilterOptions(req: Request, res: Response) {
+        try {
+            const data = await classService.getClassFilterOptions(req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch {
+            return res.status(500).json({ success: false, message: 'Không tải được bộ lọc lớp học.' });
+        }
+    }
+    async getDropoutAlerts(req: Request, res: Response) {
+        try {
+            const classId = req.query.class_id === undefined ? undefined : Number(req.query.class_id);
+            if (classId !== undefined && (!Number.isInteger(classId) || classId <= 0 || classId > 2147483647)) {
+                return res.status(400).json({ success: false, message: 'ID lớp không hợp lệ.' });
+            }
+            return res.json({ success: true, data: await dropoutRiskRepository.getSnapshots(req.user!, { classId }) });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false, message: 'Không tải được cảnh báo bỏ học.' });
+        }
+    }
     async getClasses(req: Request, res: Response) {
         try {
-            const page = parseInt(req.query.page as string) || 1;
-            const limit = parseInt(req.query.limit as string) || 10;
-            const search = req.query.search as string;
-            const status = req.query.status as ClassStatus;
-
-            const course_id = req.query.course_id ? parseInt(req.query.course_id as string) : undefined;
-            const teacher_id = req.query.teacher_id ? parseInt(req.query.teacher_id as string) : undefined;
-            const unassigned_teacher = req.query.unassigned_teacher === 'true';
-
-            const result = await classService.getClasses({ page, limit, search, status, course_id, teacher_id, unassigned_teacher });
+            const query = classListQuery.safeParse(req.query);
+            if (!query.success) return res.status(400).json({ success: false, message: 'Bộ lọc hoặc phân trang lớp học không hợp lệ.' });
+            const result = await classService.getClasses(query.data, req.user!);
 
             return res.status(200).json({
                 success: true,
@@ -72,7 +87,7 @@ export class ClassController {
                 });
             }
 
-            const classData = await classService.getClassById(Number(id));
+            const classData = await classService.getClassById(Number(id), req.user!);
 
             if (!classData) {
                 return res.status(404).json({
@@ -289,7 +304,7 @@ export class ClassController {
             const classId = Number(req.params.id);
             if (!Number.isInteger(classId) || classId <= 0) return res.status(400).json({ success: false, message: 'ID lớp không hợp lệ' });
             await dropoutRiskService.assertScoringAccess(classId, req.user!.userId, req.user!.role);
-            return res.json({ success: true, data: await dropoutRiskService.getClassSnapshots(classId) });
+            return res.json({ success: true, data: await dropoutRiskService.getClassSnapshots(classId, req.user!) });
         } catch (error: any) {
             return res.status(error.statusCode || 500).json({ success: false, message: error.message });
         }

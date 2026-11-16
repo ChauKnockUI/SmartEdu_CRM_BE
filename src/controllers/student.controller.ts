@@ -2,21 +2,51 @@ import { Request, Response } from 'express';
 import { studentService } from '../services/student.service';
 import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { StudentStatus } from '../generated/prisma';
+import { studentListQuery, studentExportQuery } from '../utils/studentListQuery';
 
 export class StudentController {
+    async getMyProfile(req: Request, res: Response) {
+        try {
+            const data = await studentService.getMyProfile(req.user!);
+            if (!data) return res.status(404).json({ success: false,
+                message: 'Tài khoản chưa được liên kết với hồ sơ học viên. Vui lòng liên hệ trung tâm.' });
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false,
+                message: error.statusCode ? error.message : 'Không tải được hồ sơ cá nhân. Vui lòng thử lại.' });
+        }
+    }
+
+    async getFilterOptions(req: Request, res: Response) {
+        try {
+            const data = await studentService.getStudentFilterOptions(req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch {
+            return res.status(500).json({ success: false, message: 'Không tải được bộ lọc lớp học.' });
+        }
+    }
+
+    async exportStudents(req: Request, res: Response) {
+        const query = studentExportQuery.safeParse(req.query);
+        if (!query.success) return res.status(400).json({ success: false, message: 'Bộ lọc xuất học viên không hợp lệ.' });
+        try {
+            const csv = await studentService.exportStudents(query.data, req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Content-Disposition', 'attachment; filename="hoc-vien.csv"');
+            return res.type('text/csv; charset=utf-8').send(csv);
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false,
+                message: error.statusCode ? error.message : 'Không xuất được danh sách học viên. Vui lòng thử lại.' });
+        }
+    }
+
     async getStudents(req: Request, res: Response) {
         try {
-            const page = parseInt(req.query.page as string) || 1;
-            const limit = parseInt(req.query.limit as string) || 10;
-            const search = req.query.search as string;
-            const status = req.query.status as StudentStatus;
-            const class_id = req.query.class_id ? parseInt(req.query.class_id as string) : undefined;
-            
-            let has_debt: boolean | undefined = undefined;
-            if (req.query.has_debt === 'true') has_debt = true;
-            if (req.query.has_debt === 'false') has_debt = false;
-
-            const result = await studentService.getStudents({ page, limit, search, status, class_id, has_debt });
+            const query = studentListQuery.safeParse(req.query);
+            if (!query.success) return res.status(400).json({ success: false, message: 'Bộ lọc hoặc phân trang học viên không hợp lệ.' });
+            const result = await studentService.getStudents(query.data, req.user!);
 
             return res.status(200).json({
                 success: true,
@@ -43,7 +73,7 @@ export class StudentController {
                 });
             }
 
-            const studentData = await studentService.getStudentById(Number(id));
+            const studentData = await studentService.getStudentById(Number(id), req.user!);
 
             if (!studentData) {
                 return res.status(404).json({

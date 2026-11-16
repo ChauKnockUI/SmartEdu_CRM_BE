@@ -1,6 +1,7 @@
 import { AttendanceStatus, Prisma, ScheduleStatus } from '../generated/prisma';
 import { prisma, withTenantTx } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
+import { assertAttendanceStudents, scheduleReadScope, studentReadScope, type AcademicActor } from '../utils/academicAccess';
 
 export interface AttendanceInput {
     student_id: number;
@@ -74,6 +75,7 @@ export class ScheduleService {
 
         // 4. Bulk Upsert logic using Prisma Transaction
         await withTenantTx(async (tx) => {
+            await assertAttendanceStudents(tx, schedule.class_id, attendances.map(item => item.student_id));
             for (const att of attendances) {
                 await tx.attendance.upsert({
                     where: {
@@ -111,64 +113,19 @@ export class ScheduleService {
     }
 
     async getMySchedules(user_id: number, role: string) {
-        if (role === 'teacher') {
-            return prisma.schedule.findMany({
-                where: {
-                    OR: [
-                        { teacher: { user_id } },
-                        { class: { teacher: { user_id } } },
-                    ],
-                },
-                include: {
-                    class: true,
-                    room: true,
-                    attendances: true,
-                },
-                orderBy: {
-                    date: 'asc',
-                },
-            });
-        }
-
-        if (role === 'student') {
-            return prisma.schedule.findMany({
-                where: {
-                    class: {
-                        classEnrollments: {
-                            some: {
-                                student: {
-                                    user_id,
-                                },
-                            },
-                        },
-                    },
-                },
-                include: {
-                    class: true,
-                    room: true,
-                    attendances: true,
-                },
-                orderBy: {
-                    date: 'asc',
-                },
-            });
-        }
-
+        const actor = { userId: user_id, role: role as AcademicActor['role'] };
         return prisma.schedule.findMany({
-            include: {
-                class: true,
-                room: true,
-                attendances: true,
-            },
-            orderBy: {
-                date: 'asc',
-            },
+            where: scheduleReadScope(actor),
+            include: { class: true, room: true, attendances: {
+                ...(!['admin', 'teacher'].includes(role) ? { where: { student: studentReadScope(actor) } } : {}),
+            } },
+            orderBy: { date: 'asc' },
         });
     }
 
-    async getByClass(class_id: number) {
+    async getByClass(class_id: number, actor: AcademicActor) {
         return prisma.schedule.findMany({
-            where: { class_id },
+            where: { class_id, AND: [scheduleReadScope(actor)] },
             include: {
                 room: {
                     select: { id: true, name: true }
@@ -177,6 +134,7 @@ export class ScheduleService {
                     select: { id: true, full_name: true }
                 },
                 attendances: {
+                    ...(!['admin', 'teacher'].includes(actor.role) ? { where: { student: studentReadScope(actor) } } : {}),
                     select: { id: true, student_id: true, status: true }
                 },
             },
@@ -184,9 +142,9 @@ export class ScheduleService {
         });
     }
 
-    async getAllSchedules(query: GetAllSchedulesQuery = {}) {
+    async getAllSchedules(query: GetAllSchedulesQuery, actor: AcademicActor) {
         const { startDate, endDate, classId, teacherId, roomId, status } = query;
-        const where: Prisma.ScheduleWhereInput = {};
+        const where: Prisma.ScheduleWhereInput = { AND: [scheduleReadScope(actor)] };
 
         if (startDate || endDate) {
             where.date = {
@@ -234,6 +192,7 @@ export class ScheduleService {
                 room: { select: { id: true, name: true } },
                 teacher: { select: { id: true, full_name: true } },
                 attendances: {
+                    ...(!['admin', 'teacher'].includes(actor.role) ? { where: { student: studentReadScope(actor) } } : {}),
                     select: {
                         id: true,
                         student_id: true,

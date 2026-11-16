@@ -1,6 +1,9 @@
 import { InvoiceStatus, PaymentMethod, Prisma } from '../generated/prisma';
 import { randomInt } from 'crypto';
 import { prisma, withTenantTx } from '../database/db';
+import { classFeeItems, createClassInvoice } from '../repositories/classInvoice';
+import { invoiceBalance, moneyCents, inactiveInvoiceStatuses } from '../utils/billing';
+import { studentReadScope, classReadScope, type AcademicActor } from '../utils/academicAccess';
 
 const toNumber = (value: Prisma.Decimal | number | null | undefined) => {
   if (value === null || value === undefined) return 0;
@@ -28,18 +31,25 @@ export type InvoiceItemInput = {
 };
 
 export class InvoiceService {
-  private payable(invoice: { total_amount: Prisma.Decimal; discount_amount: Prisma.Decimal }) {
-    return Math.max(toNumber(invoice.total_amount) - toNumber(invoice.discount_amount), 0);
+  private readScope(actor: AcademicActor): Prisma.InvoiceWhereInput {
+    return actor.role === 'admin' ? {} : { student: studentReadScope(actor) };
   }
 
-  async getClassFeeTemplate(classId: number) {
-    const classRecord = await prisma.class.findUnique({
-      where: { id: classId },
+  private async assertStudentCollection(studentId: number, actor: AcademicActor) {
+    if (!['admin', 'sale'].includes(actor.role)) throw httpError('Không có quyền quản lý khoản phải thu.', 403);
+    if (!Number.isInteger(studentId) || studentId <= 0 || studentId > 2147483647) throw httpError('ID học viên không hợp lệ.', 400);
+    const student = await prisma.student.findFirst({ where: { id: studentId, ...studentReadScope(actor) }, select: { id: true } });
+    if (!student) throw httpError('Không tìm thấy học viên trong phạm vi phụ trách.', 404);
+  }
+
+  async getClassFeeTemplate(classId: number, actor: AcademicActor) {
+    const classRecord = await prisma.class.findFirst({
+      where: { id: classId, ...classReadScope(actor) },
       include: {
         course: true,
         feePlan: { include: { items: { orderBy: { sort_order: 'asc' } } } },
         classEnrollments: {
-          where: { status: 'active' },
+          where: { status: 'active', student: studentReadScope(actor) },
           include: { student: { select: { id: true, full_name: true, email: true, phone: true } } },
           orderBy: { createdAt: 'asc' },
         },
@@ -48,19 +58,7 @@ export class InvoiceService {
 
     if (!classRecord) throw httpError('Class not found', 404);
 
-    const feeItems: InvoiceItemInput[] = classRecord.feePlan?.items.length
-      ? classRecord.feePlan.items.map((item) => ({
-          type: item.type,
-          description: item.description,
-          amount: toNumber(item.amount),
-        }))
-      : classRecord.course?.fee
-        ? [{
-            type: 'tuition',
-            description: `Học phí - ${classRecord.course.name}`,
-            amount: toNumber(classRecord.course.fee),
-          }]
-        : [];
+    const feeItems = classFeeItems(classRecord);
 
     return {
       class: {
@@ -81,15 +79,20 @@ export class InvoiceService {
     student_id?: number;
     class_id?: number;
     status?: InvoiceStatus;
-  }) {
+    invoice_id?: number;
+  }, actor: AcademicActor) {
+    for (const id of [query.invoice_id, query.student_id, query.class_id]) {
+      if (id !== undefined && (!Number.isInteger(id) || id <= 0 || id > 2147483647)) throw httpError('ID khoản phải thu, học viên hoặc lớp không hợp lệ.', 400);
+    }
     const page = query.page || 1;
     const limit = query.limit || 10;
     const skip = (page - 1) * limit;
-    const where: Prisma.InvoiceWhereInput = {};
+    const where: Prisma.InvoiceWhereInput = { AND: [this.readScope(actor)] };
 
     if (query.student_id) where.student_id = query.student_id;
     if (query.class_id) where.class_id = query.class_id;
     if (query.status) where.status = query.status;
+    if (query.invoice_id !== undefined) where.id = query.invoice_id;
 
     const [total, invoices] = await Promise.all([
       prisma.invoice.count({ where }),
@@ -108,15 +111,7 @@ export class InvoiceService {
     ]);
 
     return {
-      data: invoices.map((invoice) => {
-        const paid = invoice.payments.reduce((sum, payment) => sum + toNumber(payment.amount), 0);
-        const payable = this.payable(invoice);
-        return {
-          ...invoice,
-          paid_amount: paid,
-          remaining_amount: Math.max(payable - paid, 0),
-        };
-      }),
+      data: invoices.map(invoice => ({ ...invoice, ...invoiceBalance(invoice) })),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -129,8 +124,9 @@ export class InvoiceService {
     due_date?: Date;
     notes?: string;
     items: InvoiceItemInput[];
-  }) {
+  }, actor: AcademicActor) {
     if (!data.items.length) throw httpError('Invoice must have at least one item', 400);
+    await this.assertStudentCollection(data.student_id, actor);
     const totalAmount = data.total_amount ?? data.items.reduce((sum, item) => sum + item.amount, 0);
 
     return prisma.invoice.create({
@@ -166,35 +162,9 @@ export class InvoiceService {
     discount_amount?: number;
     notes?: string;
     extra_items?: InvoiceItemInput[];
-  }) {
-    const enrollment = await prisma.classEnrollment.findUnique({
-      where: { class_id_student_id: { class_id: data.class_id, student_id: data.student_id } },
-    });
-    if (!enrollment || enrollment.status !== 'active') {
-      throw httpError('Student is not actively enrolled in this class', 400);
-    }
-
-    const existing = await prisma.invoice.findFirst({
-      where: {
-        class_id: data.class_id,
-        student_id: data.student_id,
-        status: { notIn: ['cancelled', 'refunded'] },
-      },
-    });
-    if (existing) throw httpError(`Active invoice already exists (${existing.invoice_no})`, 409);
-
-    const template = await this.getClassFeeTemplate(data.class_id);
-    if (!template.items.length) throw httpError('This class has no fee template', 400);
-
-    const items = [...template.items, ...(data.extra_items || [])];
-    return this.createInvoice({
-      student_id: data.student_id,
-      class_id: data.class_id,
-      due_date: data.due_date,
-      discount_amount: data.discount_amount,
-      notes: data.notes || `Tạo từ lớp ${template.class.name}`,
-      items,
-    });
+  }, actor: AcademicActor) {
+    await this.assertStudentCollection(data.student_id, actor);
+    return withTenantTx(tx => createClassInvoice(tx, data));
   }
 
   async createInvoicesForClass(data: {
@@ -204,14 +174,15 @@ export class InvoiceService {
     discount_amount?: number;
     notes?: string;
     extra_items?: InvoiceItemInput[];
-  }) {
-    const template = await this.getClassFeeTemplate(data.class_id);
+  }, actor: AcademicActor) {
+    const template = await this.getClassFeeTemplate(data.class_id, actor);
     if (!template.items.length) throw httpError('This class has no fee template', 400);
 
     const enrollments = await prisma.classEnrollment.findMany({
       where: {
         class_id: data.class_id,
         status: 'active',
+        student: studentReadScope(actor),
         ...(data.student_ids?.length ? { student_id: { in: data.student_ids } } : {}),
       },
       include: { student: { select: { id: true, full_name: true, email: true } } },
@@ -219,6 +190,9 @@ export class InvoiceService {
     });
 
     const created: unknown[] = [];
+    if (data.student_ids?.some(id => !enrollments.some(item => item.student_id === id))) {
+      throw httpError('Có học viên không thuộc lớp hoặc ngoài phạm vi phụ trách.', 403);
+    }
     const skipped: Array<{ student_id: number; student_name?: string; reason: string }> = [];
 
     for (const enrollment of enrollments) {
@@ -230,7 +204,7 @@ export class InvoiceService {
           discount_amount: data.discount_amount,
           notes: data.notes || `Tạo hàng loạt từ lớp ${template.class.name}`,
           extra_items: data.extra_items,
-        });
+        }, actor);
         created.push(invoice);
       } catch (error: any) {
         skipped.push({
@@ -255,31 +229,45 @@ export class InvoiceService {
     reference_code?: string;
     received_by?: number;
     notes?: string;
-  }) {
-    if (data.amount <= 0) throw httpError('Payment amount must be greater than 0', 400);
+  }, actor: AcademicActor) {
+    if (!['admin', 'sale'].includes(actor.role)) throw httpError('Không có quyền ghi nhận thanh toán.', 403);
+    if (data.method && !Object.values(PaymentMethod).includes(data.method)) throw httpError('Phương thức thanh toán không hợp lệ.', 400);
+    if (!Number.isInteger(invoiceId) || invoiceId <= 0 || invoiceId > 2147483647 || !Number.isFinite(data.amount) || data.amount <= 0
+        || data.amount > 9999999999999.99 || Math.abs(data.amount * 100 - moneyCents(data.amount)) > 0.000001) {
+      throw httpError('Số tiền thanh toán phải lớn hơn 0 và có tối đa 2 chữ số thập phân.', 400);
+    }
+    const now = new Date();
+    if (data.paid_at && (!Number.isFinite(data.paid_at.getTime()) || data.paid_at > now)) {
+      throw httpError('Ngày thanh toán không hợp lệ hoặc ở tương lai.', 400);
+    }
 
     return withTenantTx(async (tx) => {
-      const invoice = await tx.invoice.findUnique({ where: { id: invoiceId }, include: { payments: true } });
+      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoiceId} FOR UPDATE`;
+      const invoice = await tx.invoice.findFirst({ where: { id: invoiceId, ...this.readScope(actor) }, include: { payments: true } });
       if (!invoice) throw httpError('Invoice not found', 404);
 
-      const paidBefore = invoice.payments.reduce((sum, payment) => sum + toNumber(payment.amount), 0);
-      const payable = this.payable(invoice);
-      if (paidBefore + data.amount > payable) throw httpError('Payment amount exceeds remaining balance', 400);
+      if (inactiveInvoiceStatuses.includes(invoice.status as typeof inactiveInvoiceStatuses[number])) {
+        throw httpError('Không thể thu tiền cho khoản phải thu đã hủy hoặc hoàn tiền.', 400);
+      }
+      if (invoice.payments.some(payment => payment.paid_at > now)) {
+        throw httpError('Khoản phải thu có giao dịch mang ngày tương lai. Vui lòng kiểm tra trước khi thu thêm.', 400);
+      }
+      const before = invoiceBalance(invoice, now);
+      if (moneyCents(data.amount) > moneyCents(before.remaining_amount)) throw httpError('Số tiền thanh toán vượt quá số dư còn phải thu.', 400);
 
       const transaction = await tx.paymentTransaction.create({
         data: {
           invoice_id: invoiceId,
           amount: data.amount,
           method: data.method || 'cash',
-          paid_at: data.paid_at || new Date(),
+          paid_at: data.paid_at || now,
           reference_code: data.reference_code,
           received_by: data.received_by,
           notes: data.notes,
         },
       });
 
-      const paidAfter = paidBefore + data.amount;
-      const status: InvoiceStatus = paidAfter >= payable ? 'paid' : 'partial';
+      const status = invoiceBalance({ ...invoice, payments: [...invoice.payments, { amount: data.amount, paid_at: data.paid_at || now }] }, now).collection_status;
       await tx.invoice.update({ where: { id: invoiceId }, data: { status } });
 
       const receipt = await tx.receipt.create({
@@ -295,9 +283,9 @@ export class InvoiceService {
     });
   }
 
-  async getDebts() {
+  async getDebts(actor: AcademicActor) {
     const invoices = await prisma.invoice.findMany({
-      where: { status: { in: ['pending', 'partial', 'overdue'] } },
+      where: { AND: [this.readScope(actor)], status: { notIn: [...inactiveInvoiceStatuses] } },
       include: {
         student: { select: { id: true, full_name: true, email: true, phone: true } },
         class: { select: { id: true, name: true } },
@@ -309,9 +297,7 @@ export class InvoiceService {
     const today = new Date();
     return invoices
       .map((invoice) => {
-        const paid = invoice.payments.reduce((sum, payment) => sum + toNumber(payment.amount), 0);
-        const payable = this.payable(invoice);
-        const debt = Math.max(payable - paid, 0);
+        const balance = invoiceBalance(invoice, today);
         return {
           invoice_id: invoice.id,
           invoice_no: invoice.invoice_no,
@@ -319,17 +305,21 @@ export class InvoiceService {
           class: invoice.class,
           total_amount: toNumber(invoice.total_amount),
           discount_amount: toNumber(invoice.discount_amount),
-          paid_amount: paid,
-          debt_amount: debt,
+          ...balance,
+          debt_amount: balance.remaining_amount,
           due_date: invoice.due_date,
-          status: invoice.due_date && invoice.due_date < today && debt > 0 ? 'overdue' : invoice.status,
+          status: balance.collection_status,
         };
       })
-      .filter((item) => item.debt_amount > 0);
+      .filter((item) => item.debt_amount > 0)
+      .sort((a, b) => {
+        const rank: Record<string, number> = { overdue: 0, partial: 1, pending: 2 };
+        return rank[a.collection_status] - rank[b.collection_status] || b.debt_amount - a.debt_amount;
+      });
   }
 
-  async getRevenueSummary(query: { from_date?: Date; to_date?: Date }) {
-    const where: Prisma.PaymentTransactionWhereInput = {};
+  async getRevenueSummary(query: { from_date?: Date; to_date?: Date }, actor: AcademicActor) {
+    const where: Prisma.PaymentTransactionWhereInput = { invoice: this.readScope(actor) };
     if (query.from_date || query.to_date) {
       where.paid_at = { gte: query.from_date, lte: query.to_date };
     }

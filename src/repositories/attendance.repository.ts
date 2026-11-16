@@ -1,4 +1,5 @@
 import { prisma } from '../database/db';
+import type { Prisma } from '../generated/prisma';
 
 export interface SessionAttendanceDetail {
   scheduleId: number;
@@ -31,7 +32,7 @@ export interface AbsenceRecord {
 
 export class AttendanceRepository {
   async getSessionAttendanceWithMemo(
-    scheduleId: number
+    scheduleId: number, studentScope?: Prisma.StudentWhereInput
   ): Promise<SessionAttendanceDetail | null> {
     const schedule = await prisma.schedule.findUnique({
       where: { id: scheduleId },
@@ -41,6 +42,7 @@ export class AttendanceRepository {
             id: true,
             name: true,
             classEnrollments: {
+              where: { status: 'active', ...(studentScope ? { student: studentScope } : {}) },
               select: {
                 student: {
                   select: {
@@ -59,6 +61,7 @@ export class AttendanceRepository {
           }
         },
         attendances: {
+          ...(studentScope ? { where: { student: studentScope } } : {}),
           select: {
             student_id: true,
             status: true,
@@ -97,10 +100,11 @@ export class AttendanceRepository {
     };
   }
 
-  async getAbsenceList(scheduleId: number): Promise<AbsenceRecord[]> {
+  async getAbsenceList(scheduleId: number, studentScope?: Prisma.StudentWhereInput): Promise<AbsenceRecord[]> {
     const absences = await prisma.attendance.findMany({
       where: {
         schedule_id: scheduleId,
+          ...(studentScope ? { student: studentScope } : {}),
         status: {
           in: ['absent', 'late']
         }

@@ -1,12 +1,35 @@
 import { Prisma } from '../generated/prisma';
 import { prisma, withTenantTx } from '../database/db';
+import { classReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
 
 export class ClassRepository {
+    async getFilterOptions(actor: AcademicActor) {
+        if (actor.role === 'admin') {
+            const [courses, teachers] = await Promise.all([
+                prisma.course.findMany({ select: { id: true, name: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] }),
+                prisma.teacher.findMany({ select: { id: true, full_name: true }, orderBy: [{ full_name: 'asc' }, { id: 'asc' }] }),
+            ]);
+            return { courses, teachers };
+        }
+        // Non-admin users only see option labels from classes they may actually read.
+        const classes = await prisma.class.findMany({ where: classReadScope(actor),
+            select: { course: { select: { id: true, name: true } }, teacher: { select: { id: true, full_name: true } } },
+        });
+        const courses = new Map<number, { id: number; name: string }>();
+        const teachers = new Map<number, { id: number; full_name: string }>();
+        for (const item of classes) {
+            if (item.course) courses.set(item.course.id, item.course);
+            if (item.teacher) teachers.set(item.teacher.id, item.teacher);
+        }
+        return { courses: [...courses.values()].sort((a, b) => a.name.localeCompare(b.name, 'vi') || a.id - b.id),
+            teachers: [...teachers.values()].sort((a, b) => a.full_name.localeCompare(b.full_name, 'vi') || a.id - b.id) };
+    }
+
     async findMany(params: {
         skip?: number;
         take?: number;
         where?: Prisma.ClassWhereInput;
-        orderBy?: Prisma.ClassOrderByWithRelationInput;
+        orderBy?: Prisma.ClassOrderByWithRelationInput | Prisma.ClassOrderByWithRelationInput[];
     }) {
         return await prisma.class.findMany({
             ...params,
@@ -21,7 +44,7 @@ export class ClassRepository {
                 select: { id: true, full_name: true }
                 },
                 _count: {
-                    select: { classEnrollments: true }
+                    select: { classEnrollments: { where: { status: 'active' } } }
                 }
             }
         });
@@ -31,9 +54,9 @@ export class ClassRepository {
         return await prisma.class.count({ where });
     }
 
-    async findById(id: number) {
-        return await prisma.class.findUnique({
-            where: { id },
+    async findById(id: number, actor?: AcademicActor) {
+        return await prisma.class.findFirst({
+            where: { id, ...(actor ? classReadScope(actor) : {}) },
             include: {
                 course: true,
                 room: true,
@@ -42,6 +65,7 @@ export class ClassRepository {
                     select: { classEnrollments: true }
                 },
                 classEnrollments: {
+                    ...(actor ? { where: enrollmentReadScope(actor) } : {}),
                     include: {
                         student: {
                             select: {
@@ -183,7 +207,7 @@ export class ClassRepository {
     async checkExistence(id: number) {
         return await prisma.class.findUnique({
             where: { id },
-            select: { id: true }
+            select: { id: true, status: true, start_date: true, end_date: true }
         });
     }
 

@@ -4,8 +4,26 @@ import { leadScoringService } from '../services/ai/leadScoring.service';
 import { leadScoringRepository } from '../services/ai/leadScoring.repository';
 import { LeadStatus, LeadActivityType } from '../generated/prisma';
 import { isLeadSource, LEAD_SOURCES } from '../constants/leadSources';
+import { leadEmailService } from '../services/leadEmail.service';
 
 export class LeadController {
+    getEmailConfiguration(_req: Request, res: Response) {
+        res.setHeader('Cache-Control', 'no-store');
+        return res.json({ success: true, data: leadEmailService.getConfiguration() });
+    }
+
+    async sendEmail(req: Request, res: Response) {
+        try {
+            const data = await leadService.sendLeadEmail(Number(req.params.id), req.body, req.user!);
+            return res.json({ success: true, data, message: data.history_saved
+                ? 'Dịch vụ đã tiếp nhận email. Chưa xác nhận người nhận đã nhận hoặc đọc.'
+                : 'Dịch vụ đã tiếp nhận email nhưng chưa lưu được lịch sử. Vui lòng kiểm tra dịch vụ email trước khi gửi lại.' });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false,
+                message: error.statusCode ? error.message : 'Chưa xử lý được yêu cầu gửi email. Vui lòng thử lại cùng nội dung.' });
+        }
+    }
+
     async getLeadSources(req: Request, res: Response) {
         try {
             const data = await leadService.getLeadSources(req.user?.role === 'sale' ? req.user.userId : undefined);
@@ -51,7 +69,7 @@ export class LeadController {
                 source: source as string,
                 course_id: course_id ? Number(course_id) : undefined,
                 needs_care: needs_care === 'true',
-                assigned_to: isSale ? currentUserId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
+                assigned_to: isSale ? currentUserId : (assigned_to === 'unassigned' ? null : (assigned_to ? parseInt(assigned_to as string, 10) : undefined)),
                 date_from: date_from as string,
                 date_to: date_to as string,
                 search: search as string,
@@ -213,16 +231,16 @@ export class LeadController {
 
             return res.status(201).json({
                 success: true,
-                message: 'Đã ghi nhận Activity thành công. AI đang cập nhật lại điểm số...',
+                message: 'Đã ghi nhận kết quả chăm sóc.',
                 data: activity
             });
 
         } catch (error: any) {
             console.error('[LeadController] createLeadActivity error:', error);
 
-            return res.status(500).json({
+            return res.status(error.statusCode || 500).json({
                 success: false,
-                message: 'Lỗi Internal Server khi tạo Activity cho Lead',
+                message: error.statusCode ? error.message : 'Lỗi Internal Server khi tạo Activity cho Lead',
                 error: error.message
             });
         }
@@ -288,9 +306,10 @@ export class LeadController {
             });
         } catch (error: any) {
             console.error('[LeadController] createLead error:', error);
-            return res.status(500).json({
+            return res.status(error.statusCode || 500).json({
                 success: false,
-                message: 'Lỗi Internal Server khi tạo Lead mới',
+                message: [400, 409].includes(error.statusCode) ? error.message : 'Lỗi Internal Server khi tạo Lead mới',
+                duplicate_fields: error.duplicateFields,
                 error: error.message
             });
         }
@@ -323,9 +342,15 @@ export class LeadController {
                 });
             }
 
-            const { status, assigned_to, notes, occupation, study_purpose, source, course_id, lost_reason } = req.body;
+            const { full_name, phone, email, status, assigned_to, notes, occupation, study_purpose, source, course_id, lost_reason } = req.body;
+            if (isSale && assigned_to !== undefined) {
+                return res.status(403).json({ success: false, message: 'Chỉ admin được thay đổi người phụ trách lead.' });
+            }
 
             const updatedLead = await leadService.updateLead(Number(id), {
+                full_name,
+                phone,
+                email,
                 status,
                 // Sales users cannot reassign a lead.
                 assigned_to: isSale ? undefined : assigned_to,
@@ -345,7 +370,7 @@ export class LeadController {
             console.error('[LeadController] updateLead error:', error);
             return res.status(error.statusCode || 500).json({
                 success: false,
-                message: error.statusCode === 400 ? error.message : 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
+                message: [400, 409].includes(error.statusCode) ? error.message : 'Lỗi Internal Server khi cập nhật dữ liệu Lead',
                 error: error.message
             });
         }
@@ -356,7 +381,7 @@ export class LeadController {
             const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care } = req.query;
             const isSale = req.user?.role === 'sale';
             const funnel = await leadService.getLeadFunnel({
-                assigned_to: isSale ? req.user?.userId : (assigned_to ? parseInt(assigned_to as string, 10) : undefined),
+                assigned_to: isSale ? req.user?.userId : (assigned_to === 'unassigned' ? null : (assigned_to ? parseInt(assigned_to as string, 10) : undefined)),
                 source: source as string,
                 course_id: course_id ? parseInt(course_id as string, 10) : undefined,
                 status: status as LeadStatus,
@@ -476,7 +501,7 @@ export class LeadController {
     async convertLead(req: Request, res: Response) {
         try {
             const { id } = req.params;
-            const { email } = req.body;
+            const { email, class_id } = req.body;
 
             if (!id || isNaN(Number(id))) {
                 return res.status(400).json({
@@ -509,7 +534,7 @@ export class LeadController {
                 }
             }
 
-            const newStudent = await leadService.convertLeadToStudent(Number(id), { email });
+            const newStudent = await leadService.convertLeadToStudent(Number(id), { email, class_id, user_id: req.user!.userId, user_role: req.user!.role });
 
             return res.status(201).json({
                 success: true,

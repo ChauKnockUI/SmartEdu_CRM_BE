@@ -12,9 +12,9 @@ const sendError = (res: Response, error: any) => {
 };
 
 export const financeController = {
-  async getDebts(_req: Request, res: Response) {
+  async getDebts(req: Request, res: Response) {
     try {
-      const data = await invoiceService.getDebts();
+      const data = await invoiceService.getDebts(req.user!);
       res.json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -26,7 +26,7 @@ export const financeController = {
       const data = await invoiceService.getRevenueSummary({
         from_date: parseDate(req.query.from_date),
         to_date: parseDate(req.query.to_date),
-      });
+      }, req.user!);
       res.json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -35,7 +35,7 @@ export const financeController = {
 
   async getClassFeeTemplate(req: Request, res: Response) {
     try {
-      const data = await invoiceService.getClassFeeTemplate(Number(req.params.classId));
+      const data = await invoiceService.getClassFeeTemplate(Number(req.params.classId), req.user!);
       res.json({ success: true, data });
     } catch (error) {
       sendError(res, error);

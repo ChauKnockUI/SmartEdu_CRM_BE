@@ -98,7 +98,7 @@ export class ScheduleController {
                 });
             }
  
-            const data = await scheduleService.getByClass(class_id);
+            const data = await scheduleService.getByClass(class_id, req.user!);
  
             return res.status(200).json({
                 success: true,
@@ -126,7 +126,7 @@ export class ScheduleController {
                 teacherId: teacher_id ? Number(teacher_id) : undefined,
                 roomId: room_id ? Number(room_id) : undefined,
                 status: status as any,
-            });
+            }, req.user!);
 
             return res.status(200).json({
                 success: true,

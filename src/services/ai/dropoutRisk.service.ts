@@ -3,12 +3,14 @@ import { prisma, withTenantTx } from '../../database/db';
 import { currentTenantId } from '../../database/tenant-context';
 import { dropoutRiskApi } from './dropoutRisk.api';
 import { academicSnapshot, attendanceRule, combinedRisk, HYBRID_VERSION, MAPPING_VERSION, normalizeScore, storedDay, tuitionSnapshot, vietnamDay } from './dropoutRisk.policy';
+import { dropoutRiskRepository } from '../../repositories/dropoutRisk.repository';
+import type { AcademicActor } from '../../utils/academicAccess';
 
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 export class DropoutRiskService {
   async assertScoringAccess(classId: number, userId: number, role: string) {
-    if (!['admin', 'sale', 'teacher'].includes(role)) throw Object.assign(new Error('Không có quyền đánh giá'), { statusCode: 403 });
+    if (!['admin', 'teacher'].includes(role)) throw Object.assign(new Error('Không có quyền đánh giá'), { statusCode: 403 });
     if (role === 'teacher') {
       const owned = await prisma.class.findFirst({ where: { id: classId, teacher: { user_id: userId } }, select: { id: true } });
       if (!owned) throw Object.assign(new Error('Chỉ được đánh giá lớp được phân công'), { statusCode: 403 });
@@ -164,44 +166,13 @@ export class DropoutRiskService {
     return results;
   }
 
-  private async readSnapshot(studentId: number, classId: number) {
-      const latest = await prisma.aIPrediction.findFirst({
-        where: { prediction_type: PredictionType.dropout_risk, reference_id: studentId,
-          result_data: { path: ['class_id'], equals: classId } }, orderBy: { id: 'desc' },
-      });
-      const data = latest?.result_data as Record<string, any> | null;
-      if (!data || ![MAPPING_VERSION, 'crm_assessments_to_uci_2_early', 'crm_assessments_to_uci_1'].includes(data.mapping_version)) return null;
-      return { student_id: studentId, class_id: classId,
-        risk_score: data.hybrid?.version === HYBRID_VERSION ? data.risk_score ?? null : null,
-        risk_level: data.risk_level ?? null, score_type: data.hybrid?.version === HYBRID_VERSION ? 'hybrid_risk_index' : 'academic_legacy',
-        hybrid: data.hybrid?.version === HYBRID_VERSION ? data.hybrid : null,
-        model_score: data.model_score ?? data.model?.risk_score ?? null,
-        model_includes_finance: data.model_includes_finance === true,
-        academic_score: data.model_includes_finance ? null : data.academic_score ?? data.model?.risk_score ?? null,
-        evidence: data.evidence || null,
-        top_reasons: data.top_reasons || [], model_status: data.model_status,
-        limited_data: data.snapshot?.limited_data || false, action: data.action,
-        evaluated_at: latest!.createdAt.toISOString() };
-  }
-
-  async getClassSnapshots(classId: number) {
-    const enrollments = await prisma.classEnrollment.findMany({ where: { class_id: classId }, select: { student_id: true } });
-    const rows = await Promise.all(enrollments.map(enrollment => this.readSnapshot(enrollment.student_id, classId)));
-    return rows.filter(row => row !== null);
+  async getClassSnapshots(classId: number, actor: AcademicActor) {
+    return dropoutRiskRepository.getSnapshots(actor, { classId });
   }
 
   async getStudentClassSnapshots(studentId: number, userId: number, role: string) {
     if (!['admin', 'sale', 'teacher'].includes(role)) throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
-    const enrollments = await prisma.classEnrollment.findMany({
-      where: { student_id: studentId, status: 'active', class: {
-        status: { in: ['ongoing', 'upcoming'] }, ...(role === 'teacher' ? { teacher: { user_id: userId } } : {}),
-      } },
-      select: { class_id: true, class: { select: { id: true, name: true, status: true } } },
-    });
-    return Promise.all(enrollments.map(async enrollment => ({
-      class_id: enrollment.class_id, class_name: enrollment.class.name, class_status: enrollment.class.status,
-      student_id: studentId, ...(await this.readSnapshot(studentId, enrollment.class_id)),
-    })));
+    return dropoutRiskRepository.getSnapshots({ userId, role: role as AcademicActor['role'] }, { studentId, includeUpcoming: true });
   }
 
 }

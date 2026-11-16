@@ -2,6 +2,7 @@ import { adminPrisma } from '../../database/admin-db';
 import { prisma } from '../../database/db';
 import { runWithTenant } from '../../database/tenant-context';
 import { dropoutRiskService } from './dropoutRisk.service';
+import { ensureClassStatusesCurrent } from '../classStatus.service';
 
 /** Cross-tenant job: resolve tenants with admin client, all business queries remain tenant scoped. */
 export function startDropoutRiskJob() {
@@ -17,6 +18,7 @@ export function startDropoutRiskJob() {
         if (stopped) break;
         try {
           await runWithTenant(tenant.id, async () => {
+            await ensureClassStatusesCurrent();
             const classes = await prisma.class.findMany({ where: { status: 'ongoing' }, select: { id: true } });
             for (const item of classes) {
               if (stopped) break;

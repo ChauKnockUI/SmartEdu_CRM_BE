@@ -22,7 +22,8 @@ export const invoiceController = {
         student_id: parseNumber(req.query.student_id),
         class_id: parseNumber(req.query.class_id),
         status: req.query.status as InvoiceStatus | undefined,
-      });
+        invoice_id: parseNumber(req.query.invoice_id),
+      }, req.user!);
       res.json({ success: true, ...result });
     } catch (error) {
       sendError(res, error);
@@ -39,7 +40,7 @@ export const invoiceController = {
         due_date: parseDate(req.body.due_date),
         notes: req.body.notes,
         items: req.body.items || [],
-      });
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -55,7 +56,7 @@ export const invoiceController = {
         discount_amount: parseNumber(req.body.discount_amount),
         notes: req.body.notes,
         extra_items: req.body.extra_items || [],
-      });
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -71,7 +72,7 @@ export const invoiceController = {
         discount_amount: parseNumber(req.body.discount_amount),
         notes: req.body.notes,
         extra_items: req.body.extra_items || [],
-      });
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -87,7 +88,7 @@ export const invoiceController = {
         reference_code: req.body.reference_code,
         received_by: req.user?.userId,
         notes: req.body.notes,
-      });
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -96,7 +97,8 @@ export const invoiceController = {
 
   async getStudentInvoices(req: Request, res: Response) {
     try {
-      const result = await invoiceService.getInvoices({ student_id: Number(req.params.id), page: 1, limit: 100 });
+      const result = await invoiceService.getInvoices({ student_id: Number(req.params.id),
+        page: parseNumber(req.query.page) || 1, limit: parseNumber(req.query.limit) || 100 }, req.user!);
       res.json({ success: true, ...result });
     } catch (error) {
       sendError(res, error);
