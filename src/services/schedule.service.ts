@@ -1,7 +1,13 @@
 import { AttendanceStatus, Prisma, ScheduleStatus } from '../generated/prisma';
-import { prisma, withTenantTx } from '../database/db';
-import { dropoutRiskService } from './ai/dropoutRisk.service';
-import { assertAttendanceStudents, scheduleReadScope, studentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { prisma } from '../database/db';
+import { attendanceService } from './attendance.service';
+import { scheduleReadScope, studentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { sessionChangeInfo } from '../utils/sessionChanges';
+
+const scheduleView = <T extends { memo?: string | null; status: string; class?: { status?: string } | null }>(row: T) => {
+    const { memo, ...data } = row;
+    return { ...data, scheduleChange: sessionChangeInfo(memo, row.status, row.class?.status) };
+};
 
 export interface AttendanceInput {
     student_id: number;
@@ -25,108 +31,26 @@ export class ScheduleService {
         user_role: string,
         attendances: AttendanceInput[]
     ) {
-        // 1. Fetch Schedule and related info
-        const schedule = await prisma.schedule.findUnique({
-            where: { id: schedule_id },
-            include: {
-                teacher: { select: { user_id: true } },
-                class: { select: { teacher: { select: { user_id: true } } } }
-            }
-        });
-
-        if (!schedule) {
-            const err = new Error('Không tìm thấy buổi học');
-            (err as any).statusCode = 404;
-            throw err;
-        }
-
-        // 2. Authorization
-        if (user_role !== 'admin') {
-            const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
-            if (user_role !== 'teacher' || assignedTeacherUserId !== user_id) {
-                const err = new Error('Bạn không có quyền điểm danh cho buổi học này');
-                (err as any).statusCode = 403;
-                throw err;
-            }
-        }
-
-        // 3. Time-lock check (48H)
-        // Lấy thời điểm bắt đầu buổi học (ghép date và start_time)
-        // Nếu không có start_time, ta tính từ 0h của date đó
-        let startDateTime = schedule.date;
-        if (schedule.start_time) {
-            // copy date, set time from start_time
-            startDateTime = new Date(schedule.date);
-            startDateTime.setUTCHours(
-                schedule.start_time.getUTCHours(),
-                schedule.start_time.getUTCMinutes(),
-                0, 0
-            );
-        }
-
-        const now = new Date();
-        const diffHours = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
-
-        if (diffHours > 48 && user_role !== 'admin' && !schedule.is_attendance_unlocked) {
-            const err = new Error('Dữ liệu đã bị khóa sau 48h. Vui lòng liên hệ Admin để sửa đổi.');
-            (err as any).statusCode = 403;
-            throw err;
-        }
-
-        // 4. Bulk Upsert logic using Prisma Transaction
-        await withTenantTx(async (tx) => {
-            await assertAttendanceStudents(tx, schedule.class_id, attendances.map(item => item.student_id));
-            for (const att of attendances) {
-                await tx.attendance.upsert({
-                    where: {
-                        schedule_id_student_id: {
-                            schedule_id,
-                            student_id: att.student_id
-                        }
-                    },
-                    update: {
-                        status: att.status,
-                        notes: att.notes || null
-                    },
-                    create: {
-                        schedule_id,
-                        student_id: att.student_id,
-                        status: att.status,
-                        notes: att.notes || null
-                    }
-                });
-            }
-        });
-
-        if (schedule.class_id && attendances.length > 0) {
-            const affectedStudentIds = Array.from(new Set(attendances.map((att) => att.student_id)));
-            void Promise.allSettled(
-                affectedStudentIds.map((studentId) =>
-                    dropoutRiskService.scoreStudent(studentId, schedule.class_id as number)
-                )
-            ).catch((error) => {
-                console.error('[ScheduleService] dropout risk scoring error:', error);
-            });
-        }
-
-        return { success: true };
+        return attendanceService.recordAttendance(schedule_id, user_id, user_role, { attendances });
     }
 
     async getMySchedules(user_id: number, role: string) {
         const actor = { userId: user_id, role: role as AcademicActor['role'] };
-        return prisma.schedule.findMany({
-            where: scheduleReadScope(actor),
+        const rows = await prisma.schedule.findMany({
+            where: role === 'teacher' ? { teacher: { user_id } } : scheduleReadScope(actor),
             include: { class: true, room: true, attendances: {
                 ...(!['admin', 'teacher'].includes(role) ? { where: { student: studentReadScope(actor) } } : {}),
             } },
             orderBy: { date: 'asc' },
         });
+        return rows.map(scheduleView);
     }
 
     async getByClass(class_id: number, actor: AcademicActor) {
-        return prisma.schedule.findMany({
+        const rows = await prisma.schedule.findMany({
             where: { class_id, AND: [scheduleReadScope(actor)] },
             include: {
+                class: { select: { status: true } },
                 room: {
                     select: { id: true, name: true }
                 },
@@ -140,6 +64,7 @@ export class ScheduleService {
             },
             orderBy: { date: 'asc' },
         });
+        return rows.map(scheduleView);
     }
 
     async getAllSchedules(query: GetAllSchedulesQuery, actor: AcademicActor) {
@@ -158,24 +83,18 @@ export class ScheduleService {
         }
 
         if (teacherId) {
-            where.OR = [
-                { teacher_id: teacherId },
-                { class: { teacher_id: teacherId } },
-            ];
+            where.teacher_id = teacherId;
         }
 
         if (roomId) {
-            where.OR = [
-                { room_id: roomId },
-                { class: { room_id: roomId } },
-            ];
+            where.room_id = roomId;
         }
 
         if (status) {
             where.status = status;
         }
 
-        return prisma.schedule.findMany({
+        const rows = await prisma.schedule.findMany({
             where,
             include: {
                 class: {
@@ -205,6 +124,7 @@ export class ScheduleService {
                 { start_time: 'asc' },
             ],
         });
+        return rows.map(scheduleView);
     }
 }
 

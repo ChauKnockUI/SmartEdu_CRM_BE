@@ -1,7 +1,24 @@
 import { Request, Response } from 'express';
 import { scheduleService } from '../services/schedule.service';
+import { sessionChangeService } from '../services/sessionChange.service';
 
 export class ScheduleController {
+    async cancelSession(req: Request, res: Response) {
+        try {
+            const data = await sessionChangeService.change(Number(req.params.id), 'cancel', req.body, req.user!);
+            return res.json({ success: true, message: 'Đã ghi nhận buổi nghỉ. Vui lòng xếp lịch học bù.', data });
+        } catch (error: any) { return res.status(error.statusCode || 500).json({ success: false,
+            message: error.statusCode ? error.message : 'Không thể ghi nhận buổi nghỉ.' }); }
+    }
+
+    async makeupSession(req: Request, res: Response) {
+        try {
+            const data = await sessionChangeService.change(Number(req.params.id), 'makeup', req.body, req.user!);
+            return res.json({ success: true, message: 'Đã xếp lịch học bù và kiểm tra trùng lịch.', data });
+        } catch (error: any) { return res.status(error.statusCode || 500).json({ success: false,
+            message: error.statusCode ? error.message : 'Không thể xếp lịch học bù.' }); }
+    }
+
     async updateAttendance(req: Request, res: Response) {
         try {
             const schedule_id = parseInt(req.params.id);

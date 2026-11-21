@@ -4,6 +4,8 @@ import { prisma, withTenantTx } from '../database/db';
 import { classFeeItems, createClassInvoice } from '../repositories/classInvoice';
 import { invoiceBalance, moneyCents, inactiveInvoiceStatuses } from '../utils/billing';
 import { studentReadScope, classReadScope, type AcademicActor } from '../utils/academicAccess';
+import { validateInvoiceDate, validateInvoicePricing } from '../utils/invoiceValidation';
+import { currentTenantId } from '../database/tenant-context';
 
 const toNumber = (value: Prisma.Decimal | number | null | undefined) => {
   if (value === null || value === undefined) return 0;
@@ -32,7 +34,61 @@ export type InvoiceItemInput = {
 
 export class InvoiceService {
   private readScope(actor: AcademicActor): Prisma.InvoiceWhereInput {
+    if (!['admin', 'sale', 'student'].includes(actor.role)) throw httpError('Không có quyền xem học phí.', 403);
     return actor.role === 'admin' ? {} : { student: studentReadScope(actor) };
+  }
+
+  private validId(id: number) {
+    if (!Number.isInteger(id) || id <= 0 || id > 2147483647) throw httpError('ID không hợp lệ.', 400);
+  }
+
+  async getInvoiceById(id: number, actor: AcademicActor) {
+    this.validId(id);
+    const invoice = await prisma.invoice.findFirst({ where: { id, ...this.readScope(actor) }, include: {
+      student: { select: { id: true, full_name: true, email: true, phone: true } },
+      class: { select: { id: true, name: true } },
+      items: { orderBy: { id: 'asc' } },
+      payments: { orderBy: { paid_at: 'desc' }, include: { receiver: { select: { full_name: true } } } },
+      receipts: { orderBy: { issued_at: 'desc' }, select: { id: true, receipt_no: true, transaction_id: true, issued_at: true } },
+    } });
+    if (!invoice) throw httpError('Không tìm thấy khoản phải thu trong phạm vi được xem.', 404);
+    return { ...invoice, ...invoiceBalance(invoice) };
+  }
+
+  async getReceipt(invoiceId: number, receiptId: number, actor: AcademicActor) {
+    this.validId(invoiceId); this.validId(receiptId);
+    const receipt = await prisma.receipt.findFirst({
+      where: { id: receiptId, invoice_id: invoiceId, invoice: this.readScope(actor) },
+      select: { id: true, receipt_no: true, issued_at: true, notes: true,
+        issuer: { select: { full_name: true } },
+        invoice: { select: { invoice_no: true, student: { select: { full_name: true } }, class: { select: { name: true } } } },
+        transaction: { select: { invoice_id: true, tenant_id: true, amount: true, method: true, paid_at: true,
+          reference_code: true, notes: true, receiver: { select: { full_name: true } } } },
+      },
+    });
+    if (!receipt) throw httpError('Không tìm thấy phiếu thu trong phạm vi được xem.', 404);
+    if (!receipt.transaction || receipt.transaction.invoice_id !== invoiceId || receipt.transaction.tenant_id !== currentTenantId())
+      throw httpError('Phiếu thu chưa liên kết giao dịch hợp lệ. Vui lòng kiểm tra dữ liệu trước khi in.', 409);
+    const center = await prisma.tenant.findUnique({ where: { id: currentTenantId() }, select: { name: true } });
+    return { ...receipt, center_name: center?.name };
+  }
+
+  async cancelInvoice(id: number, reason: unknown, actor: AcademicActor) {
+    if (actor.role !== 'admin') throw httpError('Chỉ Admin được hủy khoản phải thu.', 403);
+    this.validId(id);
+    if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 1000)
+      throw httpError('Vui lòng nhập lý do hủy từ 1 đến 1000 ký tự.', 400);
+    return withTenantTx(async tx => {
+      await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${id} FOR UPDATE`;
+      const invoice = await tx.invoice.findFirst({ where: { id }, include: { payments: true, receipts: true } });
+      if (!invoice) throw httpError('Không tìm thấy khoản phải thu.', 404);
+      if (invoice.payments.length || invoice.receipts.length || ['paid', 'partial', 'refunded'].includes(invoice.status))
+        throw httpError('Khoản đã ghi nhận thanh toán hoặc phát hành phiếu thu không thể hủy.', 409);
+      if (invoice.status === 'cancelled') return { ...invoice, ...invoiceBalance(invoice) };
+      const audit = `[Hủy ${new Date().toISOString()} | Admin #${actor.userId}] ${reason.trim()}`;
+      const updated = await tx.invoice.update({ where: { id }, data: { status: 'cancelled', notes: [invoice.notes, audit].filter(Boolean).join('\n') }, include: { payments: true } });
+      return { ...updated, ...invoiceBalance(updated) };
+    });
   }
 
   private async assertStudentCollection(studentId: number, actor: AcademicActor) {
@@ -43,6 +99,7 @@ export class InvoiceService {
   }
 
   async getClassFeeTemplate(classId: number, actor: AcademicActor) {
+    this.validId(classId);
     const classRecord = await prisma.class.findFirst({
       where: { id: classId, ...classReadScope(actor) },
       include: {
@@ -56,7 +113,7 @@ export class InvoiceService {
       },
     });
 
-    if (!classRecord) throw httpError('Class not found', 404);
+    if (!classRecord) throw httpError('Không tìm thấy lớp học.', 404);
 
     const feeItems = classFeeItems(classRecord);
 
@@ -125,25 +182,26 @@ export class InvoiceService {
     notes?: string;
     items: InvoiceItemInput[];
   }, actor: AcademicActor) {
-    if (!data.items.length) throw httpError('Invoice must have at least one item', 400);
+    const pricing = validateInvoicePricing(data.items, data.discount_amount, data.total_amount);
+    validateInvoiceDate(data.due_date);
     await this.assertStudentCollection(data.student_id, actor);
-    const totalAmount = data.total_amount ?? data.items.reduce((sum, item) => sum + item.amount, 0);
+    if (data.class_id !== undefined) {
+      if (!Number.isInteger(data.class_id) || data.class_id <= 0 || data.class_id > 2147483647) throw httpError('ID lớp không hợp lệ.', 400);
+      const cls = await prisma.class.findFirst({ where: { id: data.class_id, ...classReadScope(actor) }, select: { id: true } });
+      if (!cls) throw httpError('Không tìm thấy lớp trong phạm vi phụ trách.', 404);
+    }
 
     return prisma.invoice.create({
       data: {
         invoice_no: code('INV'),
         student_id: data.student_id,
         class_id: data.class_id,
-        total_amount: totalAmount,
-        discount_amount: data.discount_amount || 0,
+        total_amount: pricing.total_amount,
+        discount_amount: pricing.discount_amount,
         due_date: data.due_date,
         notes: data.notes,
         items: {
-          create: data.items.map((item) => ({
-            type: item.type || 'tuition',
-            description: item.description,
-            amount: item.amount,
-          })),
+          create: pricing.items,
         },
       },
       include: {
@@ -164,6 +222,7 @@ export class InvoiceService {
     extra_items?: InvoiceItemInput[];
   }, actor: AcademicActor) {
     await this.assertStudentCollection(data.student_id, actor);
+    this.validId(data.class_id);
     return withTenantTx(tx => createClassInvoice(tx, data));
   }
 
@@ -175,8 +234,12 @@ export class InvoiceService {
     notes?: string;
     extra_items?: InvoiceItemInput[];
   }, actor: AcademicActor) {
+    if (!['admin', 'sale'].includes(actor.role)) throw httpError('Không có quyền tạo khoản phải thu.', 403);
     const template = await this.getClassFeeTemplate(data.class_id, actor);
-    if (!template.items.length) throw httpError('This class has no fee template', 400);
+    if (!template.items.length) throw httpError('Lớp chưa có học phí hoặc bảng phí.', 400);
+    validateInvoiceDate(data.due_date);
+    if (data.extra_items !== undefined && !Array.isArray(data.extra_items)) throw httpError('Danh sách khoản thu thêm không hợp lệ.', 400);
+    validateInvoicePricing([...template.items, ...(data.extra_items ?? [])], data.discount_amount);
 
     const enrollments = await prisma.classEnrollment.findMany({
       where: {
@@ -231,6 +294,8 @@ export class InvoiceService {
     notes?: string;
   }, actor: AcademicActor) {
     if (!['admin', 'sale'].includes(actor.role)) throw httpError('Không có quyền ghi nhận thanh toán.', 403);
+    if (data.reference_code !== undefined && (typeof data.reference_code !== 'string' || data.reference_code.length > 100))
+      throw httpError('Mã giao dịch phải là chuỗi tối đa 100 ký tự.', 400);
     if (data.method && !Object.values(PaymentMethod).includes(data.method)) throw httpError('Phương thức thanh toán không hợp lệ.', 400);
     if (!Number.isInteger(invoiceId) || invoiceId <= 0 || invoiceId > 2147483647 || !Number.isFinite(data.amount) || data.amount <= 0
         || data.amount > 9999999999999.99 || Math.abs(data.amount * 100 - moneyCents(data.amount)) > 0.000001) {
@@ -244,7 +309,7 @@ export class InvoiceService {
     return withTenantTx(async (tx) => {
       await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${invoiceId} FOR UPDATE`;
       const invoice = await tx.invoice.findFirst({ where: { id: invoiceId, ...this.readScope(actor) }, include: { payments: true } });
-      if (!invoice) throw httpError('Invoice not found', 404);
+      if (!invoice) throw httpError('Không tìm thấy khoản phải thu.', 404);
 
       if (inactiveInvoiceStatuses.includes(invoice.status as typeof inactiveInvoiceStatuses[number])) {
         throw httpError('Không thể thu tiền cho khoản phải thu đã hủy hoặc hoàn tiền.', 400);
@@ -262,7 +327,7 @@ export class InvoiceService {
           method: data.method || 'cash',
           paid_at: data.paid_at || now,
           reference_code: data.reference_code,
-          received_by: data.received_by,
+          received_by: actor.userId,
           notes: data.notes,
         },
       });
@@ -275,7 +340,7 @@ export class InvoiceService {
           receipt_no: code('REC'),
           invoice_id: invoiceId,
           transaction_id: transaction.id,
-          issued_by: data.received_by,
+          issued_by: actor.userId,
         },
       });
 

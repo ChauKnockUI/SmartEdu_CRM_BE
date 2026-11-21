@@ -1,8 +1,11 @@
 import { AttendanceStatus } from '../generated/prisma';
+import { z } from 'zod';
+import { attendanceAccess } from '../utils/attendanceAccess';
 import { attendanceRepository } from '../repositories/attendance.repository';
 import { prisma, withTenantTx } from '../database/db';
 import { dropoutRiskService } from './ai/dropoutRisk.service';
 import { assertAttendanceStudents, scheduleReadScope, studentReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { archiveAttendanceNotifications } from '../utils/scheduleNotifications';
 
 export interface AttendanceInput {
   student_id: number;
@@ -22,63 +25,43 @@ export class AttendanceService {
     user_role: string,
     payload: RecordAttendancePayload
   ) {
-    const { lessonContent, attendances } = payload;
+    const parsed = z.object({
+      lessonContent: z.string().max(2000).optional(),
+      attendances: z.array(z.object({ student_id: z.number().int().positive().max(2147483647),
+        status: z.enum(['present', 'absent', 'late', 'excused']), notes: z.string().max(1000).optional() })).min(1),
+    }).safeParse(payload);
+    if (!parsed.success) throw Object.assign(new Error('Chọn trạng thái hợp lệ cho từng học viên trước khi lưu.'), { statusCode: 400 });
+    const { lessonContent, attendances } = parsed.data;
+    if (new Set(attendances.map(item => item.student_id)).size !== attendances.length)
+      throw Object.assign(new Error('Danh sách điểm danh bị trùng học viên.'), { statusCode: 400 });
 
-    const schedule = await prisma.schedule.findUnique({
-      where: { id: schedule_id },
-      include: {
-        teacher: { select: { user_id: true } },
-        class: {
-          select: {
-            id: true,
-            teacher: { select: { user_id: true } }
+    const schedule = await withTenantTx(async tx => {
+      await tx.$queryRaw`SELECT id FROM schedules WHERE id = ${schedule_id} FOR UPDATE`;
+      const schedule = await tx.schedule.findUnique({
+        where: { id: schedule_id },
+        include: {
+          teacher: { select: { user_id: true } },
+          class: {
+            select: {
+              id: true,
+              status: true,
+              teacher: { select: { user_id: true } }
+            }
           }
-        }
-      },
-    });
+        },
+      });
 
-    if (!schedule) {
-      const err = new Error('Không tìm thấy buổi học');
-      (err as any).statusCode = 404;
-      throw err;
-    }
-
-    if (user_role !== 'admin') {
-      const assignedTeacherUserId = schedule.teacher?.user_id || schedule.class?.teacher?.user_id;
-      if (user_role !== 'teacher' || assignedTeacherUserId !== user_id) {
-        const err = new Error('Bạn không có quyền điểm danh cho buổi học này');
-        (err as any).statusCode = 403;
+      if (!schedule) {
+        const err = new Error('Không tìm thấy buổi học');
+        (err as any).statusCode = 404;
         throw err;
       }
-    }
 
-    let startDateTime = schedule.date;
+      const access = attendanceAccess(schedule, user_id, user_role);
+      if (!access.canMark) throw Object.assign(new Error(access.blockReason), { statusCode: 403 });
 
-    if (schedule.start_time) {
-      startDateTime = new Date(schedule.date);
-      startDateTime.setUTCHours(
-        schedule.start_time.getUTCHours(),
-        schedule.start_time.getUTCMinutes(),
-        0,
-        0
-      );
-    }
-
-    const now = new Date();
-    const diffHours =
-      (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
-
-    if (diffHours > 48 && user_role !== 'admin' && !schedule.is_attendance_unlocked) {
-      const err = new Error(
-        'Dữ liệu đã bị khóa sau 48h. Vui lòng liên hệ Admin để sửa đổi.'
-      );
-      (err as any).statusCode = 403;
-      throw err;
-    }
-
-    await withTenantTx(async (tx) => {
       await assertAttendanceStudents(tx, schedule.class_id, attendances.map(item => item.student_id));
-      await tx.schedule.update({
+      if (lessonContent !== undefined) await tx.schedule.update({
         where: { id: schedule_id },
         data: {
           notes: lessonContent || null,
@@ -105,6 +88,8 @@ export class AttendanceService {
           },
         });
       }
+      await archiveAttendanceNotifications(tx, schedule_id);
+      return schedule;
     });
 
     if (schedule.class_id && attendances.length > 0) {
@@ -131,8 +116,10 @@ export class AttendanceService {
   async getSessionAttendance(scheduleId: number, userId: number, userRole: string) {
     const actor = { userId, role: userRole as AcademicActor['role'] };
     await this.assertSessionRead(scheduleId, actor);
-    return attendanceRepository.getSessionAttendanceWithMemo(scheduleId,
-      ['admin', 'teacher'].includes(userRole) ? undefined : studentReadScope(actor));
+    const detail = await attendanceRepository.getSessionAttendanceWithMemo(scheduleId,
+      ['admin', 'teacher'].includes(userRole) ? undefined : studentReadScope(actor), actor);
+    if (!detail) throw Object.assign(new Error('Không tìm thấy buổi học.'), { statusCode: 404 });
+    return detail;
   }
 
   async getAbsenceList(scheduleId: number, userId: number, userRole: string) {

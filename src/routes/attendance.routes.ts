@@ -40,13 +40,6 @@ router.post(
   attendanceController.requestUnlockAttendance
 );
 
-// Giáo viên gửi yêu cầu mở khóa điểm danh
-router.post(
-  '/sessions/:id/request-unlock',
-  authorize('teacher'),
-  attendanceController.requestUnlockAttendance
-);
-
 // GET /attendance/students/:studentId/classes/:classId/history - Xem lịch sử điểm danh
 // Người dùng: Admin, Giáo viên, Học viên (chỉ xem của chính mình)
 router.get(

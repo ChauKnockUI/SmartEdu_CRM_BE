@@ -11,6 +11,8 @@ router.use(authenticate);
 router.get('/', scheduleController.getAllSchedules);
 router.get('/my/schedules', scheduleController.getMySchedules);
 router.get('/class/:classId', scheduleController.getByClass);
+router.post('/:id/cancel', authorize('admin', 'teacher'), scheduleController.cancelSession);
+router.post('/:id/makeup', authorize('admin', 'teacher'), scheduleController.makeupSession);
 router.patch(
     '/:id/attendance',
     authorize('admin', 'teacher'),

@@ -1,12 +1,14 @@
 import { Prisma } from '../generated/prisma';
 import { prisma, withTenantTx } from '../database/db';
 import { classReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { assertClassResources, assertClassScheduleAvailable, lockClassScheduling, scheduleMoment } from '../utils/classScheduling';
+import { assertClassCourse } from '../utils/courseSchedule';
 
 export class ClassRepository {
     async getFilterOptions(actor: AcademicActor) {
         if (actor.role === 'admin') {
             const [courses, teachers] = await Promise.all([
-                prisma.course.findMany({ select: { id: true, name: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] }),
+                prisma.course.findMany({ select: { id: true, name: true, is_active: true, total_sessions: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] }),
                 prisma.teacher.findMany({ select: { id: true, full_name: true }, orderBy: [{ full_name: 'asc' }, { id: 'asc' }] }),
             ]);
             return { courses, teachers };
@@ -62,7 +64,7 @@ export class ClassRepository {
                 room: true,
                 teacher: true,
                 _count: {
-                    select: { classEnrollments: true }
+                    select: { classEnrollments: { where: { status: 'active' } } }
                 },
                 classEnrollments: {
                     ...(actor ? { where: enrollmentReadScope(actor) } : {}),
@@ -82,8 +84,12 @@ export class ClassRepository {
         });
     }
 
-    async create(data: Prisma.ClassCreateInput | Prisma.ClassUncheckedCreateInput) {
-        return await prisma.class.create({ data });
+    async create(data: Prisma.ClassUncheckedCreateInput) {
+        return withTenantTx(async tx => {
+            await assertClassCourse(tx, data.course_id);
+            await assertClassResources(tx, [data]);
+            return tx.class.create({ data });
+        });
     }
 
     async createWithSchedules(
@@ -91,6 +97,14 @@ export class ClassRepository {
         schedulesData: Prisma.ScheduleCreateManyInput[]
     ) {
         return await withTenantTx(async (tx) => {
+            await lockClassScheduling(tx);
+            await assertClassCourse(tx, classData.course_id, schedulesData.length);
+            const slots = schedulesData.map(item => ({ date: new Date(item.date),
+                start_time: item.start_time ? new Date(item.start_time) : null, end_time: item.end_time ? new Date(item.end_time) : null,
+                teacher_id: item.teacher_id ?? null, room_id: item.room_id ?? null }));
+            const future = slots.filter(item => scheduleMoment(item.date, item.start_time) > new Date());
+            if (!future.length) await assertClassResources(tx, [classData]);
+            await assertClassScheduleAvailable(tx, future);
             // 1. Create Class
             const newClass = await tx.class.create({
                 data: classData
@@ -113,159 +127,24 @@ export class ClassRepository {
         });
     }
 
-    async update(id: number, data: Prisma.ClassUpdateInput | Prisma.ClassUncheckedUpdateInput) {
-        return await prisma.class.update({
-            where: { id },
-            data
-        });
-    }
-
-    async updateWithFutureSchedules(
-        id: number,
-        classData: Prisma.ClassUncheckedUpdateInput,
-        scheduleData: Prisma.ScheduleUncheckedUpdateManyInput
-    ) {
-        return await withTenantTx(async (tx) => {
-            const updatedClass = await tx.class.update({
-                where: { id },
-                data: classData
-            });
-
-            if (Object.keys(scheduleData).length > 0) {
-                await tx.schedule.updateMany({
-                    where: {
-                        class_id: id,
-                        date: { gte: new Date() },
-                        status: { not: 'cancelled' }
-                    },
-                    data: scheduleData
-                });
-            }
-
-            return updatedClass;
-        });
-    }
-
-    async findFutureSchedulesByClassId(id: number) {
-        return await prisma.schedule.findMany({
-            where: {
-                class_id: id,
-                date: { gte: new Date() },
-                status: { not: 'cancelled' }
-            },
-            select: {
-                id: true,
-                date: true,
-                start_time: true,
-                end_time: true
-            }
-        });
-    }
-
-    async findScheduleResourceConflict(
-        classId: number,
-        roomId: number | null,
-        teacherId: number | null,
-        date: Date,
-        startTime: Date,
-        endTime: Date
-    ) {
-        const OR_conditions: Prisma.ScheduleWhereInput[] = [];
-        if (roomId) {
-            OR_conditions.push({ room_id: roomId });
-            OR_conditions.push({ class: { room_id: roomId } });
-        }
-        if (teacherId) {
-            OR_conditions.push({ teacher_id: teacherId });
-            OR_conditions.push({ class: { teacher_id: teacherId } });
-        }
-
-        if (OR_conditions.length === 0) return null;
-
-        return await prisma.schedule.findFirst({
-            where: {
-                class_id: { not: classId },
-                date,
-                status: { not: 'cancelled' },
-                OR: OR_conditions,
-                AND: [
-                    { start_time: { lt: endTime } },
-                    { end_time: { gt: startTime } }
-                ]
-            },
-            select: {
-                id: true,
-                date: true,
-                start_time: true,
-                end_time: true,
-                room_id: true,
-                teacher_id: true
-            }
-        });
-    }
-
-    async checkExistence(id: number) {
-        return await prisma.class.findUnique({
-            where: { id },
-            select: { id: true, status: true, start_date: true, end_date: true }
-        });
-    }
-
-    async checkScheduleConflict(roomId: number | null, teacherId: number | null, dates: Date[], startTime: Date, endTime: Date) {
-        const OR_conditions: Prisma.ScheduleWhereInput[] = [];
-        if (roomId) {
-            OR_conditions.push({ room_id: roomId });
-            OR_conditions.push({ class: { room_id: roomId } });
-        }
-        if (teacherId) {
-            OR_conditions.push({ teacher_id: teacherId });
-            OR_conditions.push({ class: { teacher_id: teacherId } });
-        }
-
-        if (OR_conditions.length === 0) return null;
-
-        return await prisma.schedule.findFirst({
-            where: {
-                date: { in: dates },
-                status: { not: 'cancelled' },
-                OR: OR_conditions,
-                AND: [
-                    { start_time: { lt: endTime } },
-                    { end_time: { gt: startTime } }
-                ]
-            }
-        });
-    }
-
-    async findConflictingResources(dates: Date[], startTime: Date, endTime: Date, excludeClassId?: number) {
+    async findConflictingResources(slots: { date: Date; start_time: Date | null; end_time: Date | null }[], excludeClassId?: number) {
+        if (slots.some(item => !item.start_time || !item.end_time))
+            throw Object.assign(new Error('Buổi học chưa có đủ giờ để kiểm tra phòng/giảng viên rảnh.'), { statusCode: 400 });
         const conflicts = await prisma.schedule.findMany({
             where: {
                 ...(excludeClassId ? { class_id: { not: excludeClassId } } : {}),
-                date: { in: dates },
-                status: { not: 'cancelled' },
-                AND: [
-                    { start_time: { lt: endTime } },
-                    { end_time: { gt: startTime } }
-                ]
+                status: { notIn: ['cancelled', 'completed'] },
+                OR: [{ class_id: null }, { class: { status: { notIn: ['cancelled', 'completed'] } } }],
+                AND: [{ OR: slots.map(item => ({ date: item.date, start_time: { lt: item.end_time! }, end_time: { gt: item.start_time! } })) }],
             },
             select: {
                 room_id: true,
                 teacher_id: true,
-                class: {
-                    select: {
-                        room_id: true,
-                        teacher_id: true
-                    }
-                }
             }
         });
 
-        const conflictingRooms = Array.from(new Set(
-            conflicts.flatMap(c => [c.room_id, c.class?.room_id]).filter((id): id is number => typeof id === 'number')
-        ));
-        const conflictingTeachers = Array.from(new Set(
-            conflicts.flatMap(c => [c.teacher_id, c.class?.teacher_id]).filter((id): id is number => typeof id === 'number')
-        ));
+        const conflictingRooms = Array.from(new Set(conflicts.map(c => c.room_id).filter((id): id is number => id !== null)));
+        const conflictingTeachers = Array.from(new Set(conflicts.map(c => c.teacher_id).filter((id): id is number => id !== null)));
 
         return { conflictingRooms, conflictingTeachers };
     }

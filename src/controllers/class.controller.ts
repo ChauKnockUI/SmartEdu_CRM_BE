@@ -142,7 +142,7 @@ export class ClassController {
 
             const newClass = await classService.createClass({
                 name,
-                course_id: course_id ? Number(course_id) : undefined,
+                course_id: course_id === undefined || course_id === null || course_id === '' ? undefined : Number(course_id),
                 fee_plan_id: fee_plan_id ? Number(fee_plan_id) : undefined,
                 teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
                 room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
@@ -197,8 +197,8 @@ export class ClassController {
                 name,
                 course_id: course_id ? Number(course_id) : undefined,
                 fee_plan_id: fee_plan_id ? Number(fee_plan_id) : undefined,
-                teacher_id: teacher_id !== undefined && teacher_id !== null && teacher_id !== '' ? Number(teacher_id) : undefined,
-                room_id: room_id !== undefined && room_id !== null && room_id !== '' ? Number(room_id) : undefined,
+                teacher_id: teacher_id === undefined ? undefined : teacher_id === null || teacher_id === '' ? null : Number(teacher_id),
+                room_id: room_id === undefined ? undefined : room_id === null || room_id === '' ? null : Number(room_id),
                 status: status as ClassStatus,
                 start_date: start_date ? new Date(start_date) : undefined,
                 end_date: end_date ? new Date(end_date) : undefined,
@@ -216,7 +216,9 @@ export class ClassController {
 
             return res.status(200).json({
                 success: true,
-                message: 'Cập nhật Lớp học thành công',
+                message: updatedClass.schedule_sync?.incomplete ? 'Đã cập nhật thông tin lớp. Cần bổ sung đủ ngày/giờ để tạo các buổi học.'
+                    : updatedClass.schedule_sync ? `Đã cập nhật lớp: ${updatedClass.schedule_sync.updated} buổi thay đổi, ${updatedClass.schedule_sync.created} buổi mới, ${updatedClass.schedule_sync.cancelled} buổi hủy. Các buổi đã học/có điểm danh được giữ nguyên.`
+                    : 'Cập nhật lớp học thành công',
                 data: updatedClass
             });
         } catch (error: any) {
@@ -239,7 +241,7 @@ export class ClassController {
 
     async checkStudentConflicts(req: Request, res: Response) {
         try {
-            const class_id = parseInt(req.params.id);
+            const class_id = Number(req.params.id);
             const { student_ids } = req.body;
             if (isNaN(class_id) || !Array.isArray(student_ids)) {
                 return res.status(400).json({
@@ -247,7 +249,7 @@ export class ClassController {
                     message: 'ID lớp học hoặc danh sách student_ids không hợp lệ'
                 });
             }
-            const conflicts = await classService.checkStudentConflicts(class_id, student_ids.map(Number));
+            const conflicts = await classService.checkStudentConflicts(class_id, student_ids);
             return res.status(200).json({
                 success: true,
                 data: conflicts
@@ -263,9 +265,10 @@ export class ClassController {
 
     async enrollStudent(req: Request, res: Response) {
         try {
-            const class_id = parseInt(req.params.id);
+            const class_id = Number(req.params.id);
             const { student_ids, allow_conflicts } = req.body;
-            if (isNaN(class_id) || !Array.isArray(student_ids) || student_ids.length === 0) {
+            if (isNaN(class_id) || !Array.isArray(student_ids) || student_ids.length === 0
+                || (allow_conflicts !== undefined && typeof allow_conflicts !== 'boolean')) {
                 return res.status(400).json({
                     success: false,
                     message: 'ID lớp học không hợp lệ hoặc danh sách student_ids trống'
@@ -273,8 +276,8 @@ export class ClassController {
             }
             const result = await classService.enrollStudents(
                 class_id,
-                student_ids.map(Number),
-                Boolean(allow_conflicts)
+                student_ids,
+                allow_conflicts ?? false
             );
             return res.status(201).json({
                 success: true,
@@ -341,8 +344,8 @@ export class ClassController {
 
     async unenrollStudent(req: Request, res: Response) {
         try {
-            const class_id = parseInt(req.params.id);
-            const student_id = parseInt(req.params.studentId);
+            const class_id = Number(req.params.id);
+            const student_id = Number(req.params.studentId);
 
             if (isNaN(class_id) || isNaN(student_id)) {
                 return res.status(400).json({

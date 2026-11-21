@@ -1,19 +1,23 @@
 import { randomInt } from 'crypto';
 import { Prisma, type InvoiceItemType } from '../generated/prisma';
+import { validateInvoiceDate, validateInvoicePricing } from '../utils/invoiceValidation';
 
 export type ClassInvoiceInput = {
     class_id: number; student_id: number; due_date?: Date; discount_amount?: number; notes?: string;
     extra_items?: { type?: InvoiceItemType; description: string; amount: number }[];
     allowEmpty?: boolean;
+    reuseExisting?: boolean;
 };
 
 export function classFeeItems(record: {
     course?: { name: string; fee: Prisma.Decimal | null } | null;
     feePlan?: { items: { type: InvoiceItemType; description: string; amount: Prisma.Decimal }[] } | null;
 }) {
-    if (record.feePlan?.items.length) return record.feePlan.items.map(item => ({
+    if (record.feePlan?.items.length) return validateInvoicePricing(record.feePlan.items.map(item => ({
         type: item.type, description: item.description, amount: Number(item.amount),
-    }));
+    }))).items;
+    if (!Number.isFinite(Number(record.course?.fee ?? 0)) || Number(record.course?.fee ?? 0) < 0)
+        throw fail('Học phí khóa học không hợp lệ.', 400);
     return record.course?.fee && Number(record.course.fee) > 0
         ? [{ type: 'tuition' as const, description: `Học phí - ${record.course.name}`, amount: Number(record.course.fee) }] : [];
 }
@@ -24,6 +28,8 @@ const include = { student: { select: { id: true, full_name: true, email: true, p
 
 // All automatic and manual class invoices use this path, including legacy Lead invoices.
 export async function createClassInvoice(tx: Prisma.TransactionClient, data: ClassInvoiceInput) {
+    validateInvoiceDate(data.due_date);
+    if (data.extra_items !== undefined && !Array.isArray(data.extra_items)) throw fail('Danh sách khoản thu thêm không hợp lệ.', 400);
     await tx.$queryRaw`SELECT id FROM classes WHERE id = ${data.class_id} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM students WHERE id = ${data.student_id} FOR UPDATE`;
     const enrollment = await tx.classEnrollment.findUnique({
@@ -32,8 +38,12 @@ export async function createClassInvoice(tx: Prisma.TransactionClient, data: Cla
     if (!enrollment || enrollment.status !== 'active') throw fail('Học viên chưa được ghi danh vào lớp này.', 400);
     const existing = await tx.invoice.findFirst({ where: {
         class_id: data.class_id, student_id: data.student_id, status: { notIn: ['cancelled', 'refunded'] },
-    } });
-    if (existing) throw fail(`Lớp đã có khoản phải thu ${existing.invoice_no}.`, 409);
+    }, include });
+    if (existing) {
+        if (data.reuseExisting && !data.extra_items?.length && !data.discount_amount)
+            return existing;
+        throw fail(`Lớp đã có khoản phải thu ${existing.invoice_no}.`, 409);
+    }
 
     const record = await tx.class.findUnique({ where: { id: data.class_id },
         include: { course: true, feePlan: { include: { items: { orderBy: { sort_order: 'asc' } } } } } });
@@ -58,13 +68,14 @@ export async function createClassInvoice(tx: Prisma.TransactionClient, data: Cla
         if (data.allowEmpty) return null;
         throw fail('Lớp chưa có học phí hoặc bảng phí.', 400);
     }
+    const pricing = validateInvoicePricing(items, data.discount_amount);
     const date = new Date();
     const stamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
     return tx.invoice.create({ data: {
         invoice_no: `INV-${stamp}-${randomInt(0, 100_000_000).toString().padStart(8, '0')}`,
         student_id: data.student_id, class_id: data.class_id,
-        total_amount: items.reduce((total, item) => total + item.amount, 0), discount_amount: data.discount_amount || 0,
+        total_amount: pricing.total_amount, discount_amount: pricing.discount_amount,
         due_date: data.due_date, notes: data.notes || `Tạo từ lớp ${record.name}`,
-        items: { create: items.map(item => ({ ...item, type: item.type || 'tuition' })) },
+        items: { create: pricing.items },
     }, include });
 }

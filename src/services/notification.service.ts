@@ -1,269 +1,164 @@
-import { prisma } from '../database/db';
-import { NotificationType } from '../generated/prisma';
+import { prisma, withTenantTx } from '../database/db';
+import { NotificationType, Prisma } from '../generated/prisma';
+import { scheduleReadScope, type AcademicActor } from '../utils/academicAccess';
+import { vietnamClassDay } from '../utils/classStatus';
+import { attendanceAccess } from '../utils/attendanceAccess';
+import { attendanceNotificationTypes, attendanceReminderState, notificationMetadata, notificationSessionId,
+    obsoleteSessionNotification, sessionNotificationVersion } from '../utils/scheduleNotifications';
+
+const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
+const validId = (id: number) => Number.isInteger(id) && id > 0 && id <= 2147483647;
+const sessionInclude = {
+    teacher: { include: { user: { select: { is_active: true, role: true } } } },
+    class: { select: { name: true, status: true, _count: { select: { classEnrollments: { where: { status: 'active' } } } } } },
+    _count: { select: { attendances: true } },
+} as const;
 
 export class NotificationService {
-    /**
-     * Lấy danh sách thông báo của user (kèm số lượng chưa đọc)
-     */
-    async getForUser(user_id: number, limit = 30) {
-        const [notifications, unreadCount] = await Promise.all([
-            prisma.notification.findMany({
-                where: { user_id },
-                orderBy: { createdAt: 'desc' },
-                take: limit,
-            }),
-            prisma.notification.count({
-                where: { user_id, is_read: false },
-            }),
-        ]);
-
-        return { notifications, unreadCount };
+    async getForUser(actor: AcademicActor, limit = 30) {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw fail('Số thông báo mỗi lần phải từ 1 đến 100.');
+        return withTenantTx(async tx => {
+            const notifications = await tx.notification.findMany({ where: { user_id: actor.userId },
+                orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit });
+            // Include older unread reminders so the badge does not retain obsolete tasks outside the first page.
+            const unread = await tx.notification.findMany({ where: { user_id: actor.userId, is_read: false,
+                OR: [{ type: { in: attendanceNotificationTypes } }, { link: { startsWith: '/lms/sessions/' } }] } });
+            const candidates = [...new Map([...notifications, ...unread].map(item => [item.id, item])).values()];
+            const ids = [...new Set(candidates.map(notificationSessionId).filter((id): id is number => !!id))];
+            const sessions = ids.length ? await tx.schedule.findMany({ where: { id: { in: ids }, AND: [scheduleReadScope(actor)] }, include: sessionInclude }) : [];
+            const byId = new Map(sessions.map(item => [item.id, item]));
+            const obsolete = new Map<number, string>();
+            const now = new Date();
+            for (const item of candidates) {
+                const id = notificationSessionId(item);
+                if (!id) continue;
+                const reason = obsoleteSessionNotification(item, byId.get(id), actor, now);
+                if (reason) obsolete.set(item.id, reason);
+            }
+            if (obsolete.size) await tx.notification.updateMany({ where: { user_id: actor.userId, id: { in: [...obsolete.keys()] } },
+                data: { is_read: true, link: null } });
+            const unreadCount = await tx.notification.count({ where: { user_id: actor.userId, is_read: false } });
+            return { notifications: notifications.map(item => obsolete.has(item.id)
+                ? { ...item, is_read: true, link: null, message: `${obsolete.get(item.id)} ${item.message}` } : item), unreadCount };
+        });
     }
 
-    /**
-     * Đánh dấu đã đọc một thông báo
-     */
     async markAsRead(id: number, user_id: number) {
-        const notif = await prisma.notification.findFirst({
-            where: { id, user_id },
-        });
-
-        if (!notif) {
-            const err = new Error('Không tìm thấy thông báo');
-            (err as any).statusCode = 404;
-            throw err;
-        }
-
-        return prisma.notification.update({
-            where: { id },
-            data: { is_read: true },
-        });
+        if (!validId(id)) throw fail('ID thông báo không hợp lệ.');
+        const result = await prisma.notification.updateMany({ where: { id, user_id, is_read: false }, data: { is_read: true } });
+        if (!result.count && !await prisma.notification.findFirst({ where: { id, user_id }, select: { id: true } }))
+            throw fail('Không tìm thấy thông báo.', 404);
+        return { already_read: result.count === 0 };
     }
 
-    /**
-     * Đánh dấu tất cả đã đọc cho user
-     */
     async markAllAsRead(user_id: number) {
-        await prisma.notification.updateMany({
-            where: { user_id, is_read: false },
-            data: { is_read: true },
-        });
+        await prisma.notification.updateMany({ where: { user_id, is_read: false }, data: { is_read: true } });
         return { success: true };
     }
 
-    /**
-     * Tạo thông báo mới (nội bộ)
-     */
-    async create(data: {
-        user_id: number;
-        type: NotificationType;
-        title: string;
-        message: string;
-        link?: string;
-        metadata?: object;
-    }) {
-        return prisma.notification.create({
-            data: {
-                user_id: data.user_id,
-                type: data.type,
-                title: data.title,
-                message: data.message,
-                link: data.link || null,
-                metadata: data.metadata ? (data.metadata as any) : undefined,
-            },
+    async create(data: { user_id: number; type: NotificationType; title: string; message: string; link?: string; metadata?: object }) {
+        return prisma.notification.create({ data: { ...data, title: data.title.slice(0, 255),
+            metadata: data.metadata as Prisma.InputJsonValue | undefined, link: data.link || null } });
+    }
+
+    async remindAttendance(scheduleId: number, overdueOnly = false) {
+        if (!validId(scheduleId)) throw fail('ID buổi học không hợp lệ.');
+        return withTenantTx(async tx => {
+            // Same row lock as attendance and session changes: recheck before creating a notification.
+            await tx.$queryRaw`SELECT id FROM schedules WHERE id = ${scheduleId} FOR UPDATE`;
+            const row = await tx.schedule.findUnique({ where: { id: scheduleId }, include: sessionInclude });
+            if (!row) throw fail('Không tìm thấy buổi học.', 404);
+            const now = new Date();
+            const state = attendanceReminderState(row, now);
+            if (state.reason) return { sent: false, reason: state.reason };
+            if (overdueOnly && !state.overdue) return { sent: false, reason: 'Buổi học chưa kết thúc.' };
+            const teacherUserId = row.teacher!.user_id!;
+            const version = sessionNotificationVersion(row);
+            const recent = await tx.notification.findFirst({ where: { user_id: teacherUserId,
+                type: { in: attendanceNotificationTypes }, createdAt: { gte: new Date(now.getTime() - 24 * 3600000) }, AND: [
+                    { metadata: { path: ['kind'], equals: 'attendance_reminder' } },
+                    { metadata: { path: ['schedule_id'], equals: scheduleId } }, { metadata: { path: ['version'], equals: version } },
+                ] }, select: { id: true } });
+            if (recent) return { sent: false, duplicate: true, reason: 'Buổi học này đã được nhắc trong 24 giờ qua; không gửi thêm thông báo trùng.' };
+            const date = row.date.toISOString().slice(0, 10).split('-').reverse().join('/');
+            const time = `${row.start_time!.toISOString().slice(11, 16)}–${row.end_time!.toISOString().slice(11, 16)}`;
+            const className = row.class!.name;
+            await tx.notification.create({ data: { user_id: teacherUserId,
+                type: state.overdue ? NotificationType.overdue_attendance : NotificationType.attendance_reminder,
+                title: `${state.overdue ? 'Chưa điểm danh sau buổi học' : 'Nhắc điểm danh'}: ${className}`.slice(0, 255),
+                message: `Buổi học lớp ${className} ngày ${date}, ${time} ${state.overdue ? 'đã kết thúc nhưng chưa có điểm danh' : 'chưa có điểm danh'}. Vui lòng hoàn tất điểm danh.`,
+                link: `/lms/sessions/${row.id}`, metadata: { kind: 'attendance_reminder', schedule_id: row.id,
+                    class_id: row.class_id, teacher_id: row.teacher_id, version, is_overdue: state.overdue },
+            } });
+            return { sent: true, teacher_name: row.teacher!.full_name, class_name: className, schedule_date: date };
         });
     }
 
-    /**
-     * Gửi nhắc điểm danh cho 1 ca học cụ thể
-     * Tìm giảng viên phụ trách ca đó và tạo thông báo
-     */
-    async remindAttendance(schedule_id: number): Promise<{
-        sent: boolean;
-        teacher_name?: string;
-        schedule_date?: string;
-        class_name?: string;
-        reason?: string;
-    }> {
-        const schedule = await prisma.schedule.findUnique({
-            where: { id: schedule_id },
-            include: {
-                class: {
-                    include: {
-                        teacher: {
-                            include: { user: true }
-                        }
-                    }
-                },
-                teacher: {
-                    include: { user: true }
-                },
-                attendances: { select: { id: true } },
-            },
+    async requestAttendanceUnlock(scheduleId: number, actor: AcademicActor) {
+        if (!validId(scheduleId)) throw fail('ID buổi học không hợp lệ.');
+        return withTenantTx(async tx => {
+            await tx.$queryRaw`SELECT id FROM schedules WHERE id = ${scheduleId} FOR UPDATE`;
+            const row = await tx.schedule.findUnique({ where: { id: scheduleId }, include: sessionInclude });
+            if (!row) throw fail('Buổi học không tồn tại.', 404);
+            const access = attendanceAccess(row, actor.userId, actor.role);
+            if (!access.canRequestUnlock) throw fail(access.blockReason || 'Buổi học hiện không cần yêu cầu mở khóa.', 403);
+            const admins = await tx.user.findMany({ where: { role: 'admin', is_active: true }, select: { id: true } });
+            if (!admins.length) throw fail('Trung tâm chưa có Admin đang hoạt động để nhận yêu cầu.');
+            const version = sessionNotificationVersion(row);
+            const recent = await tx.notification.findMany({ where: { user_id: { in: admins.map(user => user.id) },
+                link: { not: null }, createdAt: { gte: new Date(Date.now() - 24 * 3600000) }, AND: [
+                    { metadata: { path: ['kind'], equals: 'attendance_unlock_request' } },
+                    { metadata: { path: ['schedule_id'], equals: row.id } }, { metadata: { path: ['version'], equals: version } },
+                ] }, select: { user_id: true } });
+            const alreadySent = new Set(recent.map(item => item.user_id));
+            const recipients = admins.filter(user => !alreadySent.has(user.id));
+            const className = row.class?.name || 'Lớp học';
+            const date = row.date.toISOString().slice(0, 10).split('-').reverse().join('/');
+            if (recipients.length) await tx.notification.createMany({ data: recipients.map(user => ({ user_id: user.id,
+                type: NotificationType.attendance_reminder, title: `Yêu cầu mở điểm danh: ${className}`.slice(0, 255),
+                message: `${row.teacher?.full_name || 'Giảng viên'} yêu cầu mở khóa điểm danh lớp ${className} ngày ${date}.`,
+                link: `/lms/sessions/${row.id}`, metadata: { kind: 'attendance_unlock_request', schedule_id: row.id, version },
+            })) });
+            return { sent: recipients.length, duplicate: !recipients.length };
         });
+    }
 
-        if (!schedule) {
-            const err = new Error('Không tìm thấy buổi học');
-            (err as any).statusCode = 404;
-            throw err;
-        }
-
-        if (schedule.status === 'cancelled') {
-            return { sent: false, reason: 'Buổi học đã bị hủy' };
-        }
-
-        if (schedule.attendances.length > 0) {
-            return { sent: false, reason: 'Buổi học đã được điểm danh' };
-        }
-
-        // Tìm giảng viên phụ trách
-        const teacher = schedule.teacher || schedule.class?.teacher;
-        if (!teacher) {
-            return { sent: false, reason: 'Buổi học chưa có giảng viên phụ trách' };
-        }
-
-        const teacherUserId = teacher.user_id;
-        if (!teacherUserId) {
-            return { sent: false, reason: 'Giảng viên chưa có tài khoản hệ thống' };
-        }
-
-        // Kiểm tra buổi học đã qua chưa
-        const scheduleDate = new Date(schedule.date);
+    async remindAllOverdue() {
         const now = new Date();
-
-        // So sánh theo ngày (UTC)
-        const scheduleDateStr = scheduleDate.toISOString().split('T')[0];
-        const todayStr = now.toISOString().split('T')[0];
-
-        const isOverdue = scheduleDateStr < todayStr || (
-            scheduleDateStr === todayStr &&
-            schedule.end_time &&
-            schedule.end_time < now
-        );
-
-        const dateVN = scheduleDate.toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit' });
-        const className = schedule.class?.name || 'Lớp học';
-        const timeStr = schedule.start_time
-            ? schedule.start_time.toISOString().match(/T(\d{2}:\d{2})/)?.[1] || ''
-            : '';
-
-        await this.create({
-            user_id: teacherUserId,
-            type: isOverdue ? NotificationType.overdue_attendance : NotificationType.attendance_reminder,
-            title: isOverdue
-                ? `⚠️ Cần điểm danh gấp: ${className}`
-                : `🔔 Nhắc nhở điểm danh: ${className}`,
-            message: isOverdue
-                ? `Buổi học ${dateVN}${timeStr ? ` lúc ${timeStr}` : ''} của lớp ${className} đã kết thúc nhưng chưa được điểm danh. Vui lòng hoàn tất điểm danh ngay.`
-                : `Buổi học ${dateVN}${timeStr ? ` lúc ${timeStr}` : ''} của lớp ${className} sắp đến. Vui lòng nhớ điểm danh sau khi giảng dạy.`,
-            link: `/lms/sessions/${schedule_id}`,
-            metadata: {
-                schedule_id,
-                class_id: schedule.class_id,
-                teacher_id: teacher.id,
-                is_overdue: isOverdue,
-            },
-        });
-
-        return {
-            sent: true,
-            teacher_name: teacher.full_name,
-            schedule_date: dateVN,
-            class_name: className,
+        const day = new Date(`${vietnamClassDay(now)}T00:00:00Z`);
+        const clock = new Date(Date.UTC(1970, 0, 1, (now.getUTCHours() + 7) % 24, now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds()));
+        const where: Prisma.ScheduleWhereInput = { status: { not: 'cancelled' }, attendances: { none: {} },
+            start_time: { not: null }, end_time: { not: null },
+            class: { status: { not: 'cancelled' }, classEnrollments: { some: { status: 'active' } } },
+            teacher: { user: { is_active: true, role: 'teacher' } },
+            OR: [{ date: { lt: day } }, { date: day, end_time: { lte: clock } }],
         };
-    }
-
-    /**
-     * Quét tất cả buổi học quá hạn chưa điểm danh và gửi nhắc tất cả cùng lúc
-     */
-    async remindAllOverdue(): Promise<{
-        total_overdue: number;
-        sent: number;
-        skipped: number;
-        details: { schedule_id: number; class_name: string; reason?: string; sent: boolean }[];
-    }> {
-        const now = new Date();
-        const todayStart = new Date();
-        todayStart.setUTCHours(0, 0, 0, 0);
-
-        // Tìm tất cả ca học đã qua mà chưa điểm danh
-        const overdueSchedules = await prisma.schedule.findMany({
-            where: {
-                status: { not: 'cancelled' },
-                date: { lte: now },
-                attendances: { none: {} },
-            },
-            include: {
-                class: {
-                    include: {
-                        teacher: { include: { user: true } }
-                    }
-                },
-                teacher: { include: { user: true } },
-            },
-            orderBy: { date: 'desc' },
-            take: 100, // Giới hạn an toàn
-        });
-
-        const details: { schedule_id: number; class_name: string; reason?: string; sent: boolean }[] = [];
-        let sent = 0;
-        let skipped = 0;
-
-        // Tránh spam: chỉ gửi nếu chưa có thông báo tương tự trong 24h qua
-        const recentNotifs = await prisma.notification.findMany({
-            where: {
-                type: { in: [NotificationType.overdue_attendance, NotificationType.attendance_reminder] },
-                createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-            },
-            select: { metadata: true },
-        });
-
-        // Danh sách schedule_id đã nhắc trong 24h
-        const alreadyRemindedIds = new Set<number>(
-            recentNotifs
-                .map((n) => (n.metadata as any)?.schedule_id)
-                .filter(Boolean)
-        );
-
-        for (const schedule of overdueSchedules) {
-            const className = schedule.class?.name || `Schedule #${schedule.id}`;
-
-            if (alreadyRemindedIds.has(schedule.id)) {
-                details.push({ schedule_id: schedule.id, class_name: className, reason: 'Đã nhắc trong 24h qua', sent: false });
-                skipped++;
-                continue;
-            }
-
-            const result = await this.remindAttendance(schedule.id);
-
-            if (result.sent) {
-                sent++;
-                details.push({ schedule_id: schedule.id, class_name: className, sent: true });
-            } else {
-                skipped++;
-                details.push({ schedule_id: schedule.id, class_name: className, reason: result.reason, sent: false });
+        const total = await prisma.schedule.count({ where });
+        const recent = await prisma.notification.findMany({ where: { type: { in: attendanceNotificationTypes },
+            createdAt: { gte: new Date(now.getTime() - 24 * 3600000) }, metadata: { path: ['kind'], equals: 'attendance_reminder' } },
+            select: { user_id: true, metadata: true } });
+        const reminded = new Set(recent.map(item => `${notificationMetadata(item.metadata).schedule_id}:${item.user_id}:${notificationMetadata(item.metadata).version}`));
+        let sent = 0, skipped = 0, scanned = 0;
+        const details: { schedule_id: number; class_name: string; sent: boolean; reason?: string }[] = [];
+        // Scan beyond already-reminded rows; cap newly sent notifications at 100 per request.
+        while (scanned < total && sent < 100) {
+            const rows = await prisma.schedule.findMany({ where, skip: scanned, take: 100,
+                orderBy: [{ date: 'asc' }, { id: 'asc' }], include: sessionInclude });
+            if (!rows.length) break;
+            for (const row of rows) {
+                scanned++;
+                const key = `${row.id}:${row.teacher?.user_id}:${sessionNotificationVersion(row)}`;
+                const result = reminded.has(key) ? { sent: false, reason: 'Đã nhắc trong 24 giờ qua.' } : await this.remindAttendance(row.id, true);
+                if (result.sent) { sent++; reminded.add(key); } else skipped++;
+                if (details.length < 100) details.push({ schedule_id: row.id, class_name: row.class?.name || 'Buổi học', ...result });
+                if (sent >= 100) break;
             }
         }
-
-        return {
-            total_overdue: overdueSchedules.length,
-            sent,
-            skipped,
-            details,
-        };
+        return { total_overdue: total, sent, skipped, remaining: Math.max(0, total - scanned), details };
     }
 
-    /**
-     * Xóa thông báo cũ (cleanup)
-     */
     async deleteOld(days = 30) {
-        const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-        const { count } = await prisma.notification.deleteMany({
-            where: {
-                createdAt: { lt: cutoff },
-                is_read: true,
-            },
-        });
+        const { count } = await prisma.notification.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - days * 86400000) }, is_read: true } });
         return { deleted: count };
     }
 }

@@ -1,5 +1,8 @@
 import { prisma } from '../database/db';
 import type { Prisma } from '../generated/prisma';
+import { attendanceAccess } from '../utils/attendanceAccess';
+import type { AcademicActor } from '../utils/academicAccess';
+import { sessionChangeAccess } from '../utils/sessionChanges';
 
 export interface SessionAttendanceDetail {
   scheduleId: number;
@@ -10,6 +13,10 @@ export interface SessionAttendanceDetail {
   lessonContent: string | null;
   notes: string | null;
   teacherName: string;
+  roomName: string;
+  status: string;
+  attendanceAccess: ReturnType<typeof attendanceAccess>;
+  scheduleChange: ReturnType<typeof sessionChangeAccess>;
   is_attendance_unlocked?: boolean;
   enrolledStudents: {
     id: number;
@@ -32,15 +39,18 @@ export interface AbsenceRecord {
 
 export class AttendanceRepository {
   async getSessionAttendanceWithMemo(
-    scheduleId: number, studentScope?: Prisma.StudentWhereInput
+    scheduleId: number, studentScope: Prisma.StudentWhereInput | undefined, actor: AcademicActor
   ): Promise<SessionAttendanceDetail | null> {
     const schedule = await prisma.schedule.findUnique({
       where: { id: scheduleId },
       include: {
+        room: { select: { name: true } },
         class: {
           select: {
             id: true,
             name: true,
+            status: true,
+            teacher: { select: { user_id: true, full_name: true } },
             classEnrollments: {
               where: { status: 'active', ...(studentScope ? { student: studentScope } : {}) },
               select: {
@@ -57,7 +67,8 @@ export class AttendanceRepository {
         },
         teacher: {
           select: {
-            full_name: true
+            full_name: true,
+            user_id: true,
           }
         },
         attendances: {
@@ -92,7 +103,11 @@ export class AttendanceRepository {
       startTime: schedule.start_time,
       endTime: schedule.end_time,
       className: schedule.class.name,
-      teacherName: schedule.teacher?.full_name || 'Unknown',
+      teacherName: schedule.teacher?.full_name || 'Chưa phân công',
+      roomName: schedule.room?.name || 'Chưa phân công',
+      status: schedule.status,
+      attendanceAccess: attendanceAccess(schedule, actor.userId, actor.role),
+      scheduleChange: sessionChangeAccess(schedule, actor),
       lessonContent: schedule.notes,
       notes: schedule.notes,
       is_attendance_unlocked: schedule.is_attendance_unlocked,
