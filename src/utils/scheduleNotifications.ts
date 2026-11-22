@@ -2,6 +2,17 @@ import { NotificationType, type Prisma } from '../generated/prisma';
 import type { AcademicActor } from './academicAccess';
 import { scheduleMoment } from './classScheduling';
 import { sessionJournal } from './sessionChanges';
+import { vietnamClassDay } from './classStatus';
+
+export function overdueAttendanceWhere(now: Date, teacherUserId?: number): Prisma.ScheduleWhereInput {
+    const day = new Date(`${vietnamClassDay(now)}T00:00:00Z`);
+    const clock = new Date(Date.UTC(1970, 0, 1, (now.getUTCHours() + 7) % 24, now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds()));
+    return { status: { not: 'cancelled' }, attendances: { none: {} }, start_time: { not: null }, end_time: { not: null },
+        class: { status: { not: 'cancelled' }, classEnrollments: { some: { status: 'active' } } },
+        teacher: { ...(teacherUserId ? { user_id: teacherUserId } : {}), user: { is_active: true, role: 'teacher' } },
+        OR: [{ date: { lt: day } }, { date: day, end_time: { lte: clock } }],
+    };
+}
 
 export const attendanceNotificationTypes = [NotificationType.attendance_reminder, NotificationType.overdue_attendance];
 export type ReminderSession = {

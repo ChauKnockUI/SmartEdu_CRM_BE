@@ -60,7 +60,7 @@ export class AttendanceController {
 
   /**
    * GET /attendance/sessions/:id/absences
-   * Get absence list (absent & late students) for a session
+   * Get absence list (absent, late and excused students) for a session
    */
   async getAbsenceList(req: Request, res: Response) {
     try {

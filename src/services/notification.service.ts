@@ -1,10 +1,9 @@
 import { prisma, withTenantTx } from '../database/db';
 import { NotificationType, Prisma } from '../generated/prisma';
 import { scheduleReadScope, type AcademicActor } from '../utils/academicAccess';
-import { vietnamClassDay } from '../utils/classStatus';
 import { attendanceAccess } from '../utils/attendanceAccess';
 import { attendanceNotificationTypes, attendanceReminderState, notificationMetadata, notificationSessionId,
-    obsoleteSessionNotification, sessionNotificationVersion } from '../utils/scheduleNotifications';
+    obsoleteSessionNotification, sessionNotificationVersion, overdueAttendanceWhere } from '../utils/scheduleNotifications';
 
 const fail = (message: string, statusCode = 400) => Object.assign(new Error(message), { statusCode });
 const validId = (id: number) => Number.isInteger(id) && id > 0 && id <= 2147483647;
@@ -125,14 +124,7 @@ export class NotificationService {
 
     async remindAllOverdue() {
         const now = new Date();
-        const day = new Date(`${vietnamClassDay(now)}T00:00:00Z`);
-        const clock = new Date(Date.UTC(1970, 0, 1, (now.getUTCHours() + 7) % 24, now.getUTCMinutes(), now.getUTCSeconds(), now.getUTCMilliseconds()));
-        const where: Prisma.ScheduleWhereInput = { status: { not: 'cancelled' }, attendances: { none: {} },
-            start_time: { not: null }, end_time: { not: null },
-            class: { status: { not: 'cancelled' }, classEnrollments: { some: { status: 'active' } } },
-            teacher: { user: { is_active: true, role: 'teacher' } },
-            OR: [{ date: { lt: day } }, { date: day, end_time: { lte: clock } }],
-        };
+        const where = overdueAttendanceWhere(now);
         const total = await prisma.schedule.count({ where });
         const recent = await prisma.notification.findMany({ where: { type: { in: attendanceNotificationTypes },
             createdAt: { gte: new Date(now.getTime() - 24 * 3600000) }, metadata: { path: ['kind'], equals: 'attendance_reminder' } },

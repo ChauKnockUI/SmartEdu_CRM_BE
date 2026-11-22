@@ -3,6 +3,7 @@ import type { Prisma } from '../generated/prisma';
 import { attendanceAccess } from '../utils/attendanceAccess';
 import type { AcademicActor } from '../utils/academicAccess';
 import { sessionChangeAccess } from '../utils/sessionChanges';
+import { attendanceAttentionStatuses } from '../utils/attendanceSummary';
 
 export interface SessionAttendanceDetail {
   scheduleId: number;
@@ -119,9 +120,10 @@ export class AttendanceRepository {
     const absences = await prisma.attendance.findMany({
       where: {
         schedule_id: scheduleId,
-          ...(studentScope ? { student: studentScope } : {}),
+        schedule: { status: { not: 'cancelled' }, class: { status: { not: 'cancelled' } } },
+        ...(studentScope ? { student: studentScope } : {}),
         status: {
-          in: ['absent', 'late']
+          in: [...attendanceAttentionStatuses]
         }
       },
       include: {

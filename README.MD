@@ -202,6 +202,96 @@ trước lượt quét nền hiện có. Các yêu cầu đồng thời dùng ch
 Lead kiểm tra lại ngày của lớp trong transaction. Không cần cron, thư viện hoặc
 migration mới. Không tự sửa điểm danh hoặc đánh dấu buổi học đã hoàn thành.
 
+## Công việc trên Dashboard
+
+`GET /dashboard/work?view=summary` lấy bộ đếm các nhóm; chỉ tải danh sách của
+một nhóm khi mở chi tiết bằng `view=list&category=...`. Vai trò/phạm vi lấy từ
+token. Nhóm không thuộc vai trò trả 403; lỗi tải không giả số 0. Kiểu phân trang
+`category=...&page=1&limit=5` vẫn được giữ cho các lời gọi cũ.
+
+Dashboard Admin gom công việc vào khối Cảnh báo cạnh biểu đồ Nguồn Lead, cùng
+cảnh báo hiện có; chỉ hiện nhóm có việc. Xem chi tiết mở Drawer, 3 dòng/trang.
+Danh sách được tải một lần mỗi nhóm và giữ tạm trong Dashboard; đổi trang hoặc
+mở lại cùng nhóm không gọi API. Tải lại/quay về trang/quay lại cửa sổ cập nhật dữ
+liệu; cache bị thay khi đổi tài khoản, token hoặc tải lại, không lưu localStorage.
+
+- Admin: Lead chưa phân công/cần chăm sóc, hồ sơ học viên chưa có lớp đang học
+  hoặc sắp mở, lớp thiếu giáo viên/phòng, buổi thiếu điểm danh, chờ học bù, học phí.
+- Sale: Lead và học viên từ Lead mình phụ trách, công nợ theo quyền hiện tại;
+  học viên chưa có lớp chỉ mở xem hồ sơ để phối hợp với Admin.
+- Giáo viên: thiếu điểm danh/chờ học bù theo giáo viên thực tế của từng buổi.
+- Học viên: xem học phí và buổi chờ học bù của lớp đang ghi danh, không có thao tác
+  thu tiền, phân công hay chỉnh lịch.
+
+Điểm danh dùng chung điều kiện với nhắc quá hạn; học bù đọc lịch sử trong `memo`;
+công nợ dùng `invoiceService.getDebts`, tách nhóm quá hạn và chưa quá hạn.
+Hồ sơ/lớp hiển thị ngày tạo, không coi đó là số ngày chờ xếp lớp/phân công.
+Dashboard tải công việc độc lập với tổng quan, cập nhật khi mở lại trang, quay
+lại cửa sổ hoặc bấm Tải lại. Không thêm bảng, migration, cron hay thư viện.
+
+Lịch Dashboard giáo viên/học viên dùng ngày Việt Nam, loại buổi/lớp đã hủy;
+buổi tiếp theo phải có giờ bắt đầu trong tương lai. Mốc lịch là 7 ngày từ hôm nay.
+
+## Tiến độ học tập trên Dashboard học viên
+
+`overview.lists.classProgress` trả riêng từng lớp đang ghi danh/đã hoàn tất,
+không lấy lớp đã nghỉ hoặc đã hủy. Tổng buổi ưu tiên lịch thực tế, giữ buổi nghỉ
+chờ học bù trong kế hoạch và loại lịch hủy không còn sử dụng. Khi chưa có lịch,
+chỉ hiển thị số buổi dự kiến của khóa học nếu có, không tạo phần trăm giả.
+Buổi đã tổ chức phải kết thúc theo giờ Việt Nam và có điểm danh hoặc trạng thái
+`completed`; buổi quá giờ chưa xác nhận được đếm riêng. Có mặt/đi muộn, vắng và
+vắng có phép được tách theo điểm danh của chính học viên. Tiến độ tổ chức lớp
+không thay đổi trạng thái ghi danh hay tự kết luận học viên hoàn thành khóa học.
+
+## Lịch từng buổi trong hồ sơ học viên
+
+Tab Lịch học dùng `GET /students/:id/schedules`, có lọc lớp/khoảng ngày và phân
+trang 10 buổi. Mặc định tháng hiện tại theo ngày Việt Nam, tối đa 1 năm mỗi lần
+lọc. Quyền xem hồ sơ và phạm vi lớp/buổi được kiểm tra ở BE; chỉ lấy các lớp đang
+ghi danh và điểm danh của đúng học viên được chọn. Giáo viên/phòng lấy từ từng
+buổi, giữ nhãn nghỉ chờ học bù và lịch học bù như các trang lịch khác. Không dùng
+lịch thứ/giờ mẫu của lớp thay cho lịch từng buổi. Lỗi tải hiển thị riêng và có thử lại.
+
+Dashboard giáo viên/học viên mở tab Tài liệu của đúng lớp. Tài liệu hiện có luồng
+upload Supabase Storage (bucket mặc định `class-materials`, giới hạn 20 MB),
+DB lưu metadata/đường dẫn; danh sách tài liệu lớp lấy URL ký có thời hạn. Chưa
+thay hệ thống lưu file hoặc thêm kho tài liệu khóa học trong thay đổi này.
+
+## Thống kê điểm danh thống nhất
+
+Dashboard giáo viên/học viên thống kê toàn bộ lịch sử điểm danh của các buổi
+đã kết thúc theo ngày/giờ Việt Nam, loại buổi và lớp đã hủy. Giáo viên tính theo
+người phụ trách thực tế của từng buổi; học viên chỉ tính bản ghi của chính mình,
+gồm cả lịch sử lớp đã nghỉ. Tiến độ từng lớp vẫn dùng các lớp đang ghi danh/đã
+hoàn tất, có ghi rõ phạm vi riêng. Buổi cũ thiếu giờ kết thúc chỉ tính sau ngày học.
+
+Tỷ lệ tham gia = (Có mặt + Muộn) / số bản ghi đã điểm danh, làm tròn 1 chữ số
+thập phân. Vắng không phép và vắng có phép tách riêng; cả hai thuộc mẫu số.
+Chưa điểm danh không tự thành vắng, không thuộc mẫu số; chưa có dữ liệu trả
+`rate: null` và hiển thị Chưa có dữ liệu, khác với tỷ lệ 0% có điểm danh thực tế.
+Dashboard không suy đoán số chưa điểm danh từ sĩ số hiện tại của các lớp cũ.
+
+Trang buổi học dùng cùng công thức, tính riêng buổi đang xem và ghi rõ khi là
+bản nháp chưa lưu. Buổi nghỉ/hủy không áp dụng thống kê. API danh sách vắng và
+giao diện cùng gồm vắng không phép, vắng có phép và muộn, giữ phạm vi xem cũ.
+Không thêm bảng, migration hoặc sửa các bản ghi điểm danh để tính thống kê.
+
+## Hạng mục làm sau: cơ hội tư vấn học tiếp
+
+Theo yêu cầu người dùng, tạm hoãn phần này; chưa triển khai hoặc migration DB.
+Học viên gần kết thúc lớp vẫn giữ hồ sơ học viên và Lead gốc đã đăng ký.
+Thiết kế dự kiến: một học viên có nhiều cơ hội học tiếp, mỗi cơ hội có khóa mục
+tiêu, Sale phụ trách, trạng thái và lịch sử tư vấn riêng. Chốt thành công sẽ ghi
+danh hồ sơ học viên hiện có vào lớp mới; không tạo lại học viên hoặc đưa Lead gốc
+về trạng thái Mới. Có thể đặt tab Học viên học tiếp cạnh tab Khách mới trong khu
+vực Lead & Tư vấn, tái sử dụng giao diện hiện có.
+
+Cần thiết kế quan hệ và migration riêng trước khi làm: giữ nguồn Lead gốc,
+tách chống trùng hồ sơ khỏi chống trùng cơ hội đang mở, rà lại phân quyền Sale
+và báo cáo. Không chỉ bỏ unique ở Student.lead_id hoặc bỏ chặn email/điện thoại.
+Ngưỡng tiến độ chỉ gợi ý cần tư vấn, không tự quyết định học viên đủ trình độ lên
+cấp. Các tích hợp email/SMS/tổng đài cũng tiếp tục để sau theo phạm vi đã thống nhất.
+
 ## Dropout Early Warning
 
 Flow:

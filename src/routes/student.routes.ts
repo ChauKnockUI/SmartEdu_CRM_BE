@@ -16,6 +16,7 @@ router.get('/export', authorize('admin', 'sale', 'teacher'), studentController.e
 
 // Lấy chi tiết học viên
 router.get('/:id/invoices', authorize('admin', 'sale', 'student'), requireStudentRead, invoiceController.getStudentInvoices);
+router.get('/:id/schedules', requireStudentRead, studentController.getSchedules);
 router.get('/:id', requireStudentRead, studentController.getStudentById);
 router.get('/:id/dropout-risk', authorize('admin', 'sale', 'teacher'), requireStudentRead, studentController.getClassDropoutRisks);
 

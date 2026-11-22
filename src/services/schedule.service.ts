@@ -1,7 +1,7 @@
 import { AttendanceStatus, Prisma, ScheduleStatus } from '../generated/prisma';
 import { prisma } from '../database/db';
 import { attendanceService } from './attendance.service';
-import { scheduleReadScope, studentReadScope, type AcademicActor } from '../utils/academicAccess';
+import { scheduleReadScope, studentReadScope, enrollmentReadScope, type AcademicActor } from '../utils/academicAccess';
 import { sessionChangeInfo } from '../utils/sessionChanges';
 
 const scheduleView = <T extends { memo?: string | null; status: string; class?: { status?: string } | null }>(row: T) => {
@@ -25,6 +25,28 @@ export interface GetAllSchedulesQuery {
 }
 
 export class ScheduleService {
+    async getStudentSchedules(studentId: number, query: {
+        startDate: Date; endDate: Date; classId?: number; page: number; limit: number;
+    }, actor: AcademicActor) {
+        const where: Prisma.ScheduleWhereInput = {
+            AND: [scheduleReadScope(actor)], date: { gte: query.startDate, lte: query.endDate },
+            ...(query.classId ? { class_id: query.classId } : {}),
+            class: { classEnrollments: { some: {
+                ...enrollmentReadScope(actor), student_id: studentId, status: 'active', student: studentReadScope(actor),
+            } } },
+        };
+        const total = await prisma.schedule.count({ where });
+        const page = Math.min(query.page, Math.max(1, Math.ceil(total / query.limit)));
+        const rows = total ? await prisma.schedule.findMany({ where, skip: (page - 1) * query.limit, take: query.limit,
+            select: { id: true, class_id: true, date: true, start_time: true, end_time: true, status: true, memo: true,
+                class: { select: { id: true, name: true, status: true } },
+                teacher: { select: { id: true, full_name: true } }, room: { select: { id: true, name: true } },
+                attendances: { where: { student_id: studentId }, select: { status: true } },
+            }, orderBy: [{ date: 'asc' }, { start_time: 'asc' }, { id: 'asc' }],
+        }) : [];
+        return { data: rows.map(scheduleView), pagination: { total, page, limit: query.limit, totalPages: Math.ceil(total / query.limit) } };
+    }
+
     async updateAttendance(
         schedule_id: number,
         user_id: number,

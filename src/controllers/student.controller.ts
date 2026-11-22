@@ -3,8 +3,34 @@ import { studentService } from '../services/student.service';
 import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { StudentStatus } from '../generated/prisma';
 import { studentListQuery, studentExportQuery } from '../utils/studentListQuery';
+import { z } from 'zod';
+import { scheduleService } from '../services/schedule.service';
+
+const calendarDay = z.iso.date().transform(value => new Date(`${value}T00:00:00Z`));
+const studentScheduleQuery = z.object({
+    start_date: calendarDay, end_date: calendarDay,
+    class_id: z.coerce.number().int().positive().max(2147483647).optional(),
+    page: z.coerce.number().int().positive().max(2147483647).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+}).refine(value => value.start_date instanceof Date && value.end_date instanceof Date
+    && value.end_date >= value.start_date && value.end_date.getTime() - value.start_date.getTime() <= 365 * 86400000);
 
 export class StudentController {
+    async getSchedules(req: Request, res: Response) {
+        const query = studentScheduleQuery.safeParse(req.query);
+        if (!query.success) return res.status(400).json({ success: false, message: 'Chọn khoảng ngày hợp lệ, tối đa 1 năm, và phân trang hợp lệ.' });
+        try {
+            const { start_date, end_date, class_id, page, limit } = query.data;
+            const result = await scheduleService.getStudentSchedules(Number(req.params.id), {
+                startDate: start_date, endDate: end_date, classId: class_id, page, limit,
+            }, req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, ...result });
+        } catch {
+            return res.status(500).json({ success: false, message: 'Không tải được lịch học của học viên. Vui lòng thử lại.' });
+        }
+    }
+
     async getMyProfile(req: Request, res: Response) {
         try {
             const data = await studentService.getMyProfile(req.user!);

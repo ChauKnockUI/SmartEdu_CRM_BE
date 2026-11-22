@@ -7,6 +7,11 @@ import { LEAD_SOURCES } from '../constants/leadSources';
 import { dropoutRiskRepository, dropoutAttention } from '../repositories/dropoutRisk.repository';
 import { invoiceBalance, invoiceRemainingSql, moneyCents } from '../utils/billing';
 import { presentLeadActivity } from '../utils/leadEmail';
+import { vietnamClassDay } from '../utils/classStatus';
+import { scheduleMoment } from '../utils/classScheduling';
+import { sessionChangeInfo } from '../utils/sessionChanges';
+import { studentClassProgress } from '../utils/studentProgress';
+import { summarizeAttendance, attendanceStatsScheduleWhere } from '../utils/attendanceSummary';
 
 type Role = 'admin' | 'sale' | 'teacher' | 'student';
 type AlertType = 'info' | 'warning' | 'error';
@@ -16,11 +21,11 @@ const toNumber = (value: Prisma.Decimal | number | null | undefined) => {
   return typeof value === 'number' ? value : Number(value);
 };
 
-const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
-const endOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+// Schedule.date is a database DATE, represented as UTC midnight by Prisma.
+const startOfDay = (date: Date) => new Date(`${vietnamClassDay(date)}T00:00:00Z`);
 const addDays = (date: Date, days: number) => {
   const next = new Date(date);
-  next.setDate(next.getDate() + days);
+  next.setUTCDate(next.getUTCDate() + days);
   return next;
 };
 
@@ -190,9 +195,9 @@ class DashboardService {
         leadSources: row.sources.map((s) => ({ name: leadSourceLabel(s.lead_source), value: s.value })),
       },
       alerts: [
-        { id: 'risk-students', type: 'warning' as AlertType, title: `${highRiskCount} trường hợp cần liên hệ theo lớp`, action: '/ai/predictions?risk_level=high' },
+        { id: 'risk-students', type: 'warning' as AlertType, count: highRiskCount, title: `${highRiskCount} trường hợp cần liên hệ theo lớp`, action: '/ai/predictions?risk_level=high' },
         { id: 'debts', type: 'error' as AlertType, title: `${row.debts} học phí quá hạn/chưa thu`, action: '/finance/debts' },
-        { id: 'full-classes', type: 'info' as AlertType, title: `${row.full_classes} lớp sắp đầy (>80% sĩ số)`, action: '/lms/classes' },
+        { id: 'full-classes', type: 'info' as AlertType, count: row.full_classes, title: `${row.full_classes} lớp sắp đầy (≥80% sĩ số)`, action: '/lms/classes' },
         { id: 'stale-leads', type: 'warning' as AlertType, title: `${row.stale_leads} lead cần chăm sóc: chưa liên hệ hoặc đã quá 3 ngày`, action: '/crm/leads?needs_care=true' },
       ],
       activities: row.activities.map((a) => mapActivity({ ...a, createdAt: new Date(a.createdAt) })),
@@ -268,7 +273,7 @@ class DashboardService {
   private async getTeacherOverview(userId: number) {
     const now = new Date();
     const todayStart = startOfDay(now);
-    const todayEnd = endOfDay(now);
+    const todayEnd = addDays(todayStart, 1);
     const weekEnd = addDays(todayStart, 7);
 
     const teacher = await prisma.teacher.findUnique({ where: { user_id: userId } });
@@ -280,17 +285,17 @@ class DashboardService {
         include: { classEnrollments: { where: { status: 'active' } } },
       }),
       prisma.schedule.findMany({
-        where: { teacher_id: teacher.id, date: { gte: todayStart, lte: todayEnd } },
+        where: { teacher_id: teacher.id, status: { not: 'cancelled' }, class: { status: { not: 'cancelled' } }, date: { gte: todayStart, lt: todayEnd } },
         include: { class: true, room: true, attendances: true },
         orderBy: [{ date: 'asc' }, { start_time: 'asc' }],
       }),
       prisma.schedule.findMany({
-        where: { teacher_id: teacher.id, date: { gte: todayStart, lt: weekEnd } },
+        where: { teacher_id: teacher.id, status: { not: 'cancelled' }, class: { status: { not: 'cancelled' } }, date: { gte: todayStart, lt: weekEnd } },
         include: { class: true, room: true },
         orderBy: [{ date: 'asc' }, { start_time: 'asc' }],
       }),
       prisma.attendance.findMany({
-        where: { schedule: { teacher_id: teacher.id } },
+        where: { schedule: { teacher_id: teacher.id, ...attendanceStatsScheduleWhere(now) } },
         select: { status: true },
       }),
       dropoutRiskRepository.getSnapshots({ userId, role: 'teacher' }),
@@ -302,18 +307,18 @@ class DashboardService {
     ]);
 
     const studentIds = new Set(classes.flatMap((item) => item.classEnrollments.map((enrollment) => enrollment.student_id)));
-    const presentCount = attendances.filter((item) => item.status === 'present' || item.status === 'late').length;
-    const attendanceRate = attendances.length ? Number(((presentCount / attendances.length) * 100).toFixed(1)) : 0;
+    const attendance = summarizeAttendance(attendances);
     const attentionStudents = dropoutAttention(snapshots);
 
     return {
       role: 'teacher' as const,
+      attendance,
       links: { dropoutAttention: '/ai/predictions?risk_level=attention' },
       kpis: {
         activeClasses: classes.length,
         students: studentIds.size,
         sessionsThisWeek: weekSchedules.length,
-        attendanceRate,
+        attendanceRate: attendance.rate,
         supportCases: attentionStudents.length,
       },
       charts: {},
@@ -321,13 +326,15 @@ class DashboardService {
       activities: [],
       lists: {
         todayClasses: todaySchedules.map((schedule) => this.mapSchedule(schedule)),
-        upcomingSessions: weekSchedules.map((schedule) => this.mapSchedule(schedule)),
+        upcomingSessions: weekSchedules.filter(schedule => schedule.start_time && scheduleMoment(schedule.date, schedule.start_time) > now)
+          .map((schedule) => this.mapSchedule(schedule)),
         attentionStudents: attentionStudents.slice(0, 6).map((item) => ({
           id: `${item.class_id}:${item.student_id}`, name: item.full_name, className: item.class_name, risk: item,
           action: `/lms/students/${item.student_id}?tab=classes&risk_class=${item.class_id}`,
         })),
         materials: materials.map((item) => ({
           id: item.id,
+          classId: item.class_id,
           title: item.title,
           date: item.created_at,
         })),
@@ -343,17 +350,18 @@ class DashboardService {
     const student = await prisma.student.findUnique({ where: { user_id: userId } });
     if (!student) return emptyOverview('student');
 
-    const [schedules, attendances, missingAssignments, invoices, materials] = await Promise.all([
+    const [schedules, attendances, missingAssignments, invoices, materials, enrollments] = await Promise.all([
       prisma.schedule.findMany({
         where: {
           date: { gte: todayStart, lt: weekEnd },
-          class: { classEnrollments: { some: { student_id: student.id, status: 'active' } } },
+          status: { not: 'cancelled' },
+          class: { status: { not: 'cancelled' }, classEnrollments: { some: { student_id: student.id, status: 'active' } } },
         },
         include: { class: true, room: true },
         orderBy: [{ date: 'asc' }, { start_time: 'asc' }],
       }),
       prisma.attendance.findMany({
-        where: { student_id: student.id },
+        where: { student_id: student.id, schedule: attendanceStatsScheduleWhere(now) },
         select: { status: true },
       }),
       prisma.assignmentSubmission.count({ where: { student_id: student.id, status: { in: ['missing', 'late'] } } }),
@@ -368,31 +376,38 @@ class DashboardService {
         orderBy: { created_at: 'desc' },
         take: 5,
       }),
+      prisma.classEnrollment.findMany({
+        where: { student_id: student.id, status: { in: ['active', 'completed'] }, class: { status: { not: 'cancelled' } } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { class_id: true, status: true, class: { select: { name: true, status: true,
+          course: { select: { name: true, total_sessions: true } },
+          schedules: { select: { date: true, end_time: true, status: true, memo: true,
+            _count: { select: { attendances: true } },
+            attendances: { where: { student_id: student.id }, select: { status: true } },
+          } },
+        } } },
+      }),
     ]);
 
-    const attended = attendances.filter((item) => item.status === 'present' || item.status === 'late').length;
-    const absent = attendances.filter((item) => item.status === 'absent').length;
-    const attendanceRate = attendances.length ? Number(((attended / attendances.length) * 100).toFixed(1)) : 0;
+    const attendance = summarizeAttendance(attendances);
+    const nextSchedule = schedules.find(schedule => schedule.start_time && scheduleMoment(schedule.date, schedule.start_time) > now);
 
     return {
       role: 'student' as const,
+      attendance,
       kpis: {
-        attendanceRate,
-        attendedSessions: attended,
-        absentSessions: absent,
+        attendanceRate: attendance.rate,
+        attendedSessions: attendance.present + attendance.late,
+        absentSessions: attendance.absent,
         missingAssignments,
       },
       charts: {},
       alerts: [],
       activities: [],
       lists: {
-        nextClass: schedules[0] ? this.mapSchedule(schedules[0]) : null,
+        nextClass: nextSchedule ? this.mapSchedule(nextSchedule) : null,
         weekSchedule: schedules.map((schedule) => this.mapSchedule(schedule)),
-        progress: {
-          courseCompletion: attendances.length ? Math.min(100, Math.round((attendances.length / 50) * 100)) : 0,
-          attended,
-          totalTarget: 50,
-        },
+        classProgress: enrollments.map(enrollment => studentClassProgress(enrollment, now)),
         invoices: invoices.map((invoice) => {
           const balance = invoiceBalance(invoice, now);
           return {
@@ -408,6 +423,7 @@ class DashboardService {
         }),
         materials: materials.map((item) => ({
           id: item.id,
+          classId: item.class_id,
           title: item.title,
           date: item.created_at,
           type: 'material',
@@ -435,6 +451,8 @@ class DashboardService {
       startTime: schedule.start_time,
       endTime: schedule.end_time,
       room: schedule.room?.name,
+      status: schedule.status,
+      scheduleChange: sessionChangeInfo(schedule.memo, schedule.status, schedule.class?.status),
       students: schedule.attendances?.length,
     };
   }
