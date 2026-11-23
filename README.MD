@@ -254,8 +254,40 @@ lịch thứ/giờ mẫu của lớp thay cho lịch từng buổi. Lỗi tải 
 
 Dashboard giáo viên/học viên mở tab Tài liệu của đúng lớp. Tài liệu hiện có luồng
 upload Supabase Storage (bucket mặc định `class-materials`, giới hạn 20 MB),
-DB lưu metadata/đường dẫn; danh sách tài liệu lớp lấy URL ký có thời hạn. Chưa
-thay hệ thống lưu file hoặc thêm kho tài liệu khóa học trong thay đổi này.
+DB lưu metadata/đường dẫn; link tải được ký mới khi người dùng bấm tải về.
+
+## Tài liệu chung của lớp và theo buổi
+
+Giữ bảng `class_materials`, thêm `schedule_id` tùy chọn: `null` là tài liệu chung,
+có ID là tài liệu của buổi đó. Tài liệu cũ giữ nguyên và được coi là tài liệu chung.
+Khóa ngoại gồm tenant, lớp, buổi để không gắn nhầm tài liệu sang lớp/trung tâm khác.
+Không thêm kho tài liệu dùng chung cho khóa học.
+
+File nằm trong Supabase Storage, bucket mặc định `class-materials` phải để private.
+DB lưu đường dẫn ổn định trong `file_url`, không lưu signed URL. Giữ cấu hình
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET` ở BE;
+không đưa service role key sang FE. Mỗi file tối đa 20 MB, kiểm tra MIME và đuôi file.
+
+- `GET /classes/:classId/materials`: metadata, buổi học và quyền thao tác.
+- `GET /schedules/:scheduleId/materials`: tài liệu buổi đang xem cùng tài liệu chung.
+- `POST /classes/:classId/materials`: multipart `title`, `file`, `schedule_id` tùy chọn.
+- `PUT /materials/:id`: multipart sửa tên/phạm vi, có thể thay file. Bỏ `schedule_id`
+  giữ phạm vi cũ; gửi chuỗi rỗng chuyển về tài liệu chung.
+- `GET /materials/:id/download`: kiểm tra quyền rồi ký link 5 phút, có tên file tải về;
+  phản hồi `Cache-Control: no-store`. Danh sách không trả đường dẫn storage.
+- `DELETE /materials/:id`: xóa bản ghi rồi dọn file. Sửa/thay file chỉ dọn file cũ sau
+  khi lưu DB thành công; lỗi dọn file ghi log `[Material] File cleanup failed`.
+
+Admin quản lý trong trung tâm; giáo viên chính quản lý tài liệu cả lớp. Giáo viên
+được phân công riêng buổi chỉ quản lý tài liệu buổi đó, xem được tài liệu chung.
+Học viên đang học/đã hoàn tất lớp chỉ xem và tải; đã nghỉ lớp không còn quyền.
+Sale không truy cập tài liệu. Quyền tài liệu độc lập với khóa thời gian điểm danh.
+
+Migration chuẩn bị tại `prisma/migrations/20261122120000_materials_by_session/migration.sql`.
+Chưa tự áp dụng vào DB. Khi triển khai, kiểm tra đúng môi trường và các migration
+đang chờ, sao lưu theo quy trình hiện có, sau đó chạy `npm run db:migrate:deploy`
+và `npm run db:generate`, khởi động lại BE rồi triển khai FE tương ứng. Dừng tiến
+trình BE trước khi generate nếu Windows đang khóa file Prisma engine.
 
 ## Thống kê điểm danh thống nhất
 
