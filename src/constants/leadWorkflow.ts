@@ -17,5 +17,13 @@ export const leadNeedsCareWhere = (now = new Date()): Prisma.LeadWhereInput => (
     status: { in: LEAD_ACTIVE_STATUSES },
     OR: [{ last_contacted: null }, { last_contacted: { lt: leadCareCutoff(now) } }],
 });
+export const LEAD_CARE_FILTERS = ['unassigned', 'never_contacted', 'follow_up'] as const;
+export type LeadCareFilter = typeof LEAD_CARE_FILTERS[number];
+export const leadCareWhere = (care: LeadCareFilter, now = new Date()): Prisma.LeadWhereInput => ({
+    status: { in: LEAD_ACTIVE_STATUSES },
+    ...(care === 'unassigned' ? { assigned_to: null }
+        : care === 'never_contacted' ? { last_contacted: null }
+            : { last_contacted: { lt: leadCareCutoff(now) } }),
+});
 export const LEAD_ASSIGNMENT_REQUIRED = 'Vui lòng phân công Sale phụ trách trước khi tiếp tục chăm sóc Lead.';
 export const LEAD_CHANGED = 'Trạng thái hoặc người phụ trách Lead vừa thay đổi. Vui lòng tải lại và thử lại.';

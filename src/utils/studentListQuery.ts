@@ -7,6 +7,7 @@ export const studentListQuery = z.object({
     search: z.string().trim().max(200).optional(),
     status: z.enum(StudentStatus).optional(),
     class_id: z.coerce.number().int().positive().max(2147483647).optional(),
+    exclude_class_id: z.coerce.number().int().positive().max(2147483647).optional(),
     has_debt: z.enum(['true', 'false']).transform(value => value === 'true').optional(),
 });
 export const studentExportQuery = studentListQuery.omit({ page: true, limit: true });

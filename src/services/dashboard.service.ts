@@ -300,8 +300,18 @@ class DashboardService {
       }),
       dropoutRiskRepository.getSnapshots({ userId, role: 'teacher' }),
       prisma.class_materials.findMany({
-        where: { classes: { teacher_id: teacher.id } },
-        orderBy: { created_at: 'desc' },
+        where: { OR: [
+          { classes: { teacher_id: teacher.id } },
+          { schedule: { teacher_id: teacher.id } },
+          { schedule_id: null, classes: { schedules: { some: { teacher_id: teacher.id } } } },
+        ] },
+        select: { id: true, class_id: true, schedule_id: true, title: true, file_name: true, file_size: true, created_at: true,
+          classes: { select: { name: true, teacher_id: true,
+            schedules: { where: { teacher_id: teacher.id }, select: { id: true }, orderBy: { date: 'desc' }, take: 1 },
+          } },
+          schedule: { select: { id: true, date: true, start_time: true, end_time: true, status: true } },
+        },
+        orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
         take: 5,
       }),
     ]);
@@ -335,6 +345,13 @@ class DashboardService {
         materials: materials.map((item) => ({
           id: item.id,
           classId: item.class_id,
+          className: item.classes.name,
+          schedule: item.schedule,
+          fileName: item.file_name,
+          fileSize: item.file_size,
+          action: item.schedule_id ? `/lms/sessions/${item.schedule_id}?material_scope=${item.schedule_id}`
+            : item.classes.teacher_id === teacher.id ? `/lms/classes/${item.class_id}?tab=materials&material_scope=common`
+              : `/lms/sessions/${item.classes.schedules[0]?.id}?material_scope=common`,
           title: item.title,
           date: item.created_at,
         })),

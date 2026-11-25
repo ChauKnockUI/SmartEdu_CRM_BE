@@ -75,6 +75,7 @@ export class ClassRepository {
                                 full_name: true,
                                 email: true,
                                 phone: true,
+                                status: true,
                             }
                         }
                     },

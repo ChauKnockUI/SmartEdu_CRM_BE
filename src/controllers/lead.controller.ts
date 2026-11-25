@@ -5,6 +5,7 @@ import { leadScoringRepository } from '../services/ai/leadScoring.repository';
 import { LeadStatus, LeadActivityType } from '../generated/prisma';
 import { isLeadSource, LEAD_SOURCES } from '../constants/leadSources';
 import { leadEmailService } from '../services/leadEmail.service';
+import { LEAD_CARE_FILTERS, type LeadCareFilter } from '../constants/leadWorkflow';
 
 export class LeadController {
     getEmailConfiguration(_req: Request, res: Response) {
@@ -53,12 +54,17 @@ export class LeadController {
                 assigned_to,
                 course_id,
                 needs_care,
+                care,
                 date_from,
                 date_to,
                 search,
                 sort_by,
                 sort_dir
             } = req.query;
+
+            if (care !== undefined && !LEAD_CARE_FILTERS.includes(care as LeadCareFilter)) {
+                return res.status(400).json({ success: false, message: 'Nhóm chăm sóc không hợp lệ.' });
+            }
 
             const isSale = req.user?.role === 'sale';
             const currentUserId = req.user?.userId;
@@ -69,6 +75,7 @@ export class LeadController {
                 source: source as string,
                 course_id: course_id ? Number(course_id) : undefined,
                 needs_care: needs_care === 'true',
+                care: care as LeadCareFilter | undefined,
                 assigned_to: isSale ? currentUserId : (assigned_to === 'unassigned' ? null : (assigned_to ? parseInt(assigned_to as string, 10) : undefined)),
                 date_from: date_from as string,
                 date_to: date_to as string,
@@ -378,7 +385,10 @@ export class LeadController {
 
     async getLeadFunnel(req: Request, res: Response) {
         try {
-            const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care } = req.query;
+            const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care, care } = req.query;
+            if (care !== undefined && !LEAD_CARE_FILTERS.includes(care as LeadCareFilter)) {
+                return res.status(400).json({ success: false, message: 'Nhóm chăm sóc không hợp lệ.' });
+            }
             const isSale = req.user?.role === 'sale';
             const funnel = await leadService.getLeadFunnel({
                 assigned_to: isSale ? req.user?.userId : (assigned_to === 'unassigned' ? null : (assigned_to ? parseInt(assigned_to as string, 10) : undefined)),
@@ -387,6 +397,7 @@ export class LeadController {
                 status: status as LeadStatus,
                 search: search as string,
                 needs_care: needs_care === 'true',
+                care: care as LeadCareFilter | undefined,
                 date_from: date_from as string,
                 date_to: date_to as string,
             });

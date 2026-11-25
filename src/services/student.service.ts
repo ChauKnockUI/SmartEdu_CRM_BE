@@ -11,6 +11,7 @@ export interface GetStudentsQuery {
     search?: string;
     status?: StudentStatus;
     class_id?: number;
+    exclude_class_id?: number;
     has_debt?: boolean;
 }
 
@@ -37,7 +38,7 @@ export class StudentService {
     }
 
     private async listWhere(query: GetStudentsQuery, actor: AcademicActor) {
-        const { search, status, class_id, has_debt } = query;
+        const { search, status, class_id, exclude_class_id, has_debt } = query;
         const where: Prisma.StudentWhereInput = { AND: [studentReadScope(actor)] };
 
         if (search) {
@@ -56,6 +57,12 @@ export class StudentService {
             where.classEnrollments = {
                 some: { class_id, ...enrollmentReadScope(actor) }
             };
+        }
+
+        if (exclude_class_id) {
+            (where.AND as Prisma.StudentWhereInput[]).push({ classEnrollments: {
+                none: { class_id: exclude_class_id, status: { not: 'dropped' } }
+            } });
         }
 
         if (has_debt !== undefined && ['admin', 'sale'].includes(actor.role)) {

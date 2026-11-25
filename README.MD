@@ -283,6 +283,25 @@ Admin quản lý trong trung tâm; giáo viên chính quản lý tài liệu c�
 Học viên đang học/đã hoàn tất lớp chỉ xem và tải; đã nghỉ lớp không còn quyền.
 Sale không truy cập tài liệu. Quyền tài liệu độc lập với khóa thời gian điểm danh.
 
+Danh sách tài liệu gần đây trên dashboard giảng viên dùng cùng phạm vi quyền:
+lớp chính, buổi được phân công riêng và tài liệu chung của lớp có buổi được phân
+công. Chỉ trả metadata lớp/buổi và liên kết mở phù hợp; không trả đường dẫn file
+hoặc signed URL trong tổng quan. Tên file multipart tiếng Việt được chuẩn hóa;
+ZIP chấp nhận thêm MIME `application/x-zip-compressed` của Windows.
+
+`SUPABASE_SERVICE_ROLE_KEY` nhận secret key `sb_secret_...` hoặc JWT có role
+`service_role`; không dùng publishable/anon key. Lỗi Storage ghi log đã lọc khóa
+với tiền tố `[Material] Storage request failed`, phân biệt lỗi quyền, bucket,
+dung lượng, MIME và chứng chỉ HTTPS. Không bật public bucket để sửa lỗi quyền.
+Nếu Windows truy cập HTTPS được nhưng Node báo `UNABLE_TO_VERIFY_LEAF_SIGNATURE`,
+dùng Node 22.19+ và đặt `$env:NODE_USE_SYSTEM_CA="1"` trước khi chạy BE, hoặc cấu
+hình `NODE_EXTRA_CA_CERTS` trỏ tới CA PEM đáng tin cậy trước khi khởi động Node.
+Không tắt xác minh TLS. Thiết lập CA không thay thế việc cấu hình đúng server key.
+
+Middleware multipart giữ ngữ cảnh request bằng `AsyncResource.bind` ở callback
+Multer, áp dụng cho tải mới và cập nhật tài liệu. Tránh mất tenant khi stream
+kết thúc; tenant vẫn lấy từ middleware xác thực hiện có, không lấy từ form upload.
+
 Migration chuẩn bị tại `prisma/migrations/20261122120000_materials_by_session/migration.sql`.
 Chưa tự áp dụng vào DB. Khi triển khai, kiểm tra đúng môi trường và các migration
 đang chờ, sao lưu theo quy trình hiện có, sau đó chạy `npm run db:migrate:deploy`
@@ -347,3 +366,11 @@ Manual scoring endpoint:
 ```http
 POST /students/:id/dropout-risk/score?class_id=123
 ```
+
+## Tra cứu học viên khi ghi danh
+
+`GET /api/students` hỗ trợ thêm `exclude_class_id` (ID lớp nguyên dương). Bộ lọc
+loại học viên có ghi danh khác `dropped` trong lớp đó trước khi phân trang và đếm
+tổng, vẫn kết hợp phạm vi tài khoản/trung tâm hiện có. FE tra cứu hồ sơ `active`,
+20 người mỗi trang. Chi tiết lớp trả thêm `student.status` để xác định nút ghi
+danh lại, không cần tải toàn bộ danh sách học viên. Không thay đổi schema DB.

@@ -14,13 +14,37 @@ const ALLOWED_TYPES: Record<string, string[]> = {
     'application/vnd.ms-powerpoint': ['ppt'],
     'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['pptx'],
     'text/plain': ['txt'], 'image/png': ['png'], 'image/jpeg': ['jpg', 'jpeg'],
-    'application/zip': ['zip'], 'audio/mpeg': ['mp3'], 'video/mp4': ['mp4'],
+    'application/zip': ['zip'], 'application/x-zip-compressed': ['zip'], 'audio/mpeg': ['mp3'], 'video/mp4': ['mp4'],
 };
 type Actor = { userId: number; role: string };
 type MaterialFile = { originalname: string; mimetype: string; size: number; buffer: Buffer };
 type Session = { id: number; date: Date; start_time: Date | null; end_time: Date | null; status: string; teacher: { user_id: number | null } | null };
 type Access = { classId: number; owner: boolean; managedIds: number[]; schedules: Session[] };
 const fail = (code: number, message: string) => Object.assign(new Error(message), { statusCode: code });
+
+function storageFailure(error: unknown, action: 'upload' | 'replace' | 'download') {
+    const detail = error as { code?: string; status?: number; statusCode?: string; message?: string; originalError?: { cause?: { code?: string } } };
+    const code = detail.code || detail.statusCode || String(detail.status || '');
+    const cause = detail.originalError?.cause?.code;
+    const message = String(detail.message || ''), key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    console.error('[Material] Storage request failed:', { action, bucket: SUPABASE_STORAGE_BUCKET, code, cause,
+        message: (key ? message.split(key).join('[redacted]') : message).slice(0, 250) });
+    let status = 502, text = action === 'download' ? 'Không lấy được liên kết tải file. Vui lòng thử lại.' : 'Không thể tải file lên kho tài liệu. Vui lòng thử lại.';
+    if (code === 'NoSuchBucket' || /bucket.*not found/i.test(message)) {
+        status = 503; text = 'Kho tài liệu chưa được thiết lập. Vui lòng liên hệ quản trị viên trung tâm.';
+    } else if (['401', '403', 'InvalidJWT', 'AccessDenied'].includes(code) || /invalid api key|row.level security|unauthorized/i.test(message)) {
+        status = 503; text = 'Kho tài liệu chưa được cấu hình quyền truy cập. Vui lòng liên hệ quản trị viên trung tâm.';
+    } else if (code === '413' || code === 'EntityTooLarge') {
+        status = 400; text = 'File vượt giới hạn dung lượng của kho tài liệu. Vui lòng chọn file nhỏ hơn.';
+    } else if (code === 'InvalidMimeType' || /mime type.*not supported|mime type.*not allowed/i.test(message)) {
+        status = 400; text = 'Định dạng file này chưa được kho tài liệu chấp nhận.';
+    } else if (cause && ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT'].includes(cause)) {
+        status = 503; text = 'Không kết nối được kho tài liệu do lỗi chứng chỉ HTTPS. Vui lòng báo quản trị viên trung tâm.';
+    } else if (action === 'download' && (code === '404' || code === 'NoSuchKey')) {
+        status = 404; text = 'Không tìm thấy tệp của tài liệu này.';
+    }
+    return fail(status, text + (action === 'replace' ? ' Tài liệu cũ vẫn được giữ nguyên.' : ''));
+}
 
 function validTitle(title: string) {
     if (typeof title !== 'string' || !title.trim() || title.trim().length > 200) throw fail(400, 'Tên tài liệu phải từ 1 đến 200 ký tự.');
@@ -35,6 +59,15 @@ function validFile(file: MaterialFile) {
 }
 const storagePath = (classId: number, ext: string) =>
     'tenant-' + currentTenantId() + '/class-' + classId + '/' + randomUUID() + '.' + ext;
+
+function fileName(name: string) {
+    // Multipart headers from browsers can arrive decoded as Latin-1 by Busboy.
+    if (/^[\u0000-\u00ff]+$/.test(name)) {
+        const bytes = Buffer.from(name, 'latin1'), utf8 = bytes.toString('utf8');
+        if (Buffer.from(utf8, 'utf8').equals(bytes)) name = utf8;
+    }
+    return name.replace(/\\/g, '/').split('/').pop()!.replace(/[\u0000-\u001f\u007f]/g, '');
+}
 
 // Support public URLs saved by old versions, but never sign URLs from another project.
 function getStoragePath(value: string): string | null {
@@ -134,11 +167,11 @@ export class MaterialService {
         this.assertTarget(access, scheduleId);
         const title = validTitle(params.title), ext = validFile(file), path = storagePath(classId, ext);
         const { error } = await getSupabase().storage.from(SUPABASE_STORAGE_BUCKET).upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
-        if (error) throw fail(502, 'Không thể tải file lên kho tài liệu. Vui lòng thử lại.');
+        if (error) throw storageFailure(error, 'upload');
         try {
             const item = await prisma.class_materials.create({ data: {
                 tenant_id: currentTenantId(), class_id: classId, schedule_id: scheduleId, title,
-                file_name: file.originalname.replace(/\\/g, '/').split('/').pop()!.replace(/[\u0000-\u001f\u007f]/g, ''),
+                file_name: fileName(file.originalname),
                 file_url: path, file_type: file.mimetype, file_size: file.size, uploaded_by: userId,
             } });
             return this.present(item, access);
@@ -154,14 +187,14 @@ export class MaterialService {
         if (data.file) {
             path = storagePath(item.class_id, validFile(data.file));
             const { error } = await getSupabase().storage.from(SUPABASE_STORAGE_BUCKET).upload(path, data.file.buffer, { contentType: data.file.mimetype, upsert: false });
-            if (error) throw fail(502, 'Không thể tải file thay thế. Tài liệu cũ vẫn được giữ nguyên.');
+            if (error) throw storageFailure(error, 'replace');
         }
         let updated;
         try {
             updated = await prisma.class_materials.update({
                 where: { id, tenant_id: currentTenantId(), updated_at: item.updated_at, file_url: item.file_url },
                 data: { title, schedule_id: scheduleId,
-                    ...(data.file && path ? { file_url: path, file_name: data.file.originalname.replace(/\\/g, '/').split('/').pop()!.replace(/[\u0000-\u001f\u007f]/g, ''),
+                    ...(data.file && path ? { file_url: path, file_name: fileName(data.file.originalname),
                         file_type: data.file.mimetype, file_size: data.file.size } : {}),
                 },
             });
@@ -191,7 +224,7 @@ export class MaterialService {
         if (!path) throw fail(404, 'Không tìm thấy tệp của tài liệu này.');
         const { data, error } = await getSupabase().storage.from(SUPABASE_STORAGE_BUCKET)
             .createSignedUrl(path, DOWNLOAD_TTL, { download: item.file_name });
-        if (error || !data?.signedUrl) throw fail(Number(error?.statusCode) === 404 ? 404 : 502, 'Không lấy được liên kết tải file. Vui lòng thử lại.');
+        if (error || !data?.signedUrl) throw storageFailure(error || { message: 'Missing signed URL' }, 'download');
         return { url: data.signedUrl, expires_in: DOWNLOAD_TTL };
     }
 }

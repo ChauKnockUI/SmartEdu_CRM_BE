@@ -16,3 +16,9 @@ coverage/
 
 # Config with credentials (dùng .env thay thế)
 config/
+
+# Runtime config contains environment-variable reads, not credentials.
+!src/config/
+src/config/*
+!src/config/env.ts
+!src/config/supabase.ts

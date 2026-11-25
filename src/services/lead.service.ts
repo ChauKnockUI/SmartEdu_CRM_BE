@@ -10,6 +10,7 @@ import { LEAD_CARE_STATUSES, LEAD_ASSIGNMENT_REQUIRED, leadNeedsCareWhere, leadC
 import { leadEmailService } from './leadEmail.service';
 import { leadEmailContentPrefix, presentLeadActivity } from '../utils/leadEmail';
 import { currentTenantId } from '../database/tenant-context';
+import { leadCareWhere, type LeadCareFilter } from '../constants/leadWorkflow';
 export interface GetLeadsQuery {
     page?: number;
     limit?: number;
@@ -18,6 +19,7 @@ export interface GetLeadsQuery {
     assigned_to?: number | null;
     course_id?: number;
     needs_care?: boolean;
+    care?: LeadCareFilter;
     date_from?: string; // Định dạng ISO Date
     date_to?: string;   // Định dạng ISO Date
     search?: string;
@@ -58,6 +60,7 @@ export interface GetFunnelQuery {
     status?: LeadStatus;
     search?: string;
     needs_care?: boolean;
+    care?: LeadCareFilter;
 }
 
 export interface CreateLeadActivityInput {
@@ -105,6 +108,7 @@ export class LeadService {
             assigned_to,
             course_id,
             needs_care,
+            care,
             date_from,
             date_to,
             search,
@@ -128,8 +132,8 @@ export class LeadService {
             where.assigned_to = assigned_to;
         }
         if (course_id) where.course_id = course_id;
-        if (needs_care) {
-            where.AND = [leadNeedsCareWhere()];
+        if (care || needs_care) {
+            where.AND = [care ? leadCareWhere(care) : leadNeedsCareWhere()];
         }
 
         if (date_from || date_to) {
@@ -405,7 +409,7 @@ export class LeadService {
     }
 
     async getLeadFunnel(query: GetFunnelQuery) {
-        const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care } = query;
+        const { assigned_to, source, course_id, date_from, date_to, status, search, needs_care, care } = query;
         const now = new Date();
         const threeDaysAgo = leadCareCutoff(now);
 
@@ -413,7 +417,7 @@ export class LeadService {
             assigned_to,
             source,
             course_id,
-            status, search, needs_care,
+            status, search, needs_care, care,
             date_from: date_from ? new Date(date_from) : undefined,
             date_to: date_to ? new Date(date_to) : undefined,
             staleBefore: threeDaysAgo,

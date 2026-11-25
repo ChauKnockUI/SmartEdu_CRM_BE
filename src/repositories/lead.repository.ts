@@ -6,6 +6,7 @@ import { LEAD_CHANGED, LEAD_ACTIVE_STATUSES } from '../constants/leadWorkflow';
 import { createClassInvoice } from './classInvoice';
 import { leadEmailRequestPrefix } from '../utils/leadEmail';
 import { effectiveClassStatus } from '../utils/classStatus';
+import type { LeadCareFilter } from '../constants/leadWorkflow';
 
 export interface FunnelAggregateRow {
     status: string;
@@ -290,6 +291,7 @@ export class LeadRepository {
         status?: LeadStatus;
         search?: string;
         needs_care?: boolean;
+        care?: LeadCareFilter;
     }): Promise<FunnelAggregateRow[]> {
         const tenantId = currentTenantId();
         const conds: Prisma.Sql[] = [Prisma.sql`l.tenant_id = ${tenantId}`];
@@ -304,7 +306,12 @@ export class LeadRepository {
             const pattern = `%${filters.search}%`;
             conds.push(Prisma.sql`(l.full_name ILIKE ${pattern} OR l.phone ILIKE ${pattern} OR l.email ILIKE ${pattern})`);
         }
-        if (filters.needs_care) conds.push(Prisma.sql`(l.status::text IN (${Prisma.join(LEAD_ACTIVE_STATUSES)}) AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore}))`);
+        if (filters.care) {
+            conds.push(Prisma.sql`l.status::text IN (${Prisma.join(LEAD_ACTIVE_STATUSES)})`);
+            conds.push(filters.care === 'unassigned' ? Prisma.sql`l.assigned_to IS NULL`
+                : filters.care === 'never_contacted' ? Prisma.sql`l.last_contacted IS NULL`
+                    : Prisma.sql`l.last_contacted < ${filters.staleBefore}`);
+        } else if (filters.needs_care) conds.push(Prisma.sql`(l.status::text IN (${Prisma.join(LEAD_ACTIVE_STATUSES)}) AND (l.last_contacted IS NULL OR l.last_contacted < ${filters.staleBefore}))`);
 
         // Scores are percentages on 0..100, including sub-one-percent values.
         const rows = await withTenantTx((tx) =>
