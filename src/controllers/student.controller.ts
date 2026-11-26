@@ -2,21 +2,77 @@ import { Request, Response } from 'express';
 import { studentService } from '../services/student.service';
 import { dropoutRiskService } from '../services/ai/dropoutRisk.service';
 import { StudentStatus } from '../generated/prisma';
+import { studentListQuery, studentExportQuery } from '../utils/studentListQuery';
+import { z } from 'zod';
+import { scheduleService } from '../services/schedule.service';
+
+const calendarDay = z.iso.date().transform(value => new Date(`${value}T00:00:00Z`));
+const studentScheduleQuery = z.object({
+    start_date: calendarDay, end_date: calendarDay,
+    class_id: z.coerce.number().int().positive().max(2147483647).optional(),
+    page: z.coerce.number().int().positive().max(2147483647).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+}).refine(value => value.start_date instanceof Date && value.end_date instanceof Date
+    && value.end_date >= value.start_date && value.end_date.getTime() - value.start_date.getTime() <= 365 * 86400000);
 
 export class StudentController {
+    async getSchedules(req: Request, res: Response) {
+        const query = studentScheduleQuery.safeParse(req.query);
+        if (!query.success) return res.status(400).json({ success: false, message: 'Chọn khoảng ngày hợp lệ, tối đa 1 năm, và phân trang hợp lệ.' });
+        try {
+            const { start_date, end_date, class_id, page, limit } = query.data;
+            const result = await scheduleService.getStudentSchedules(Number(req.params.id), {
+                startDate: start_date, endDate: end_date, classId: class_id, page, limit,
+            }, req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, ...result });
+        } catch {
+            return res.status(500).json({ success: false, message: 'Không tải được lịch học của học viên. Vui lòng thử lại.' });
+        }
+    }
+
+    async getMyProfile(req: Request, res: Response) {
+        try {
+            const data = await studentService.getMyProfile(req.user!);
+            if (!data) return res.status(404).json({ success: false,
+                message: 'Tài khoản chưa được liên kết với hồ sơ học viên. Vui lòng liên hệ trung tâm.' });
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false,
+                message: error.statusCode ? error.message : 'Không tải được hồ sơ cá nhân. Vui lòng thử lại.' });
+        }
+    }
+
+    async getFilterOptions(req: Request, res: Response) {
+        try {
+            const data = await studentService.getStudentFilterOptions(req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ success: true, data });
+        } catch {
+            return res.status(500).json({ success: false, message: 'Không tải được bộ lọc lớp học.' });
+        }
+    }
+
+    async exportStudents(req: Request, res: Response) {
+        const query = studentExportQuery.safeParse(req.query);
+        if (!query.success) return res.status(400).json({ success: false, message: 'Bộ lọc xuất học viên không hợp lệ.' });
+        try {
+            const csv = await studentService.exportStudents(query.data, req.user!);
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Content-Disposition', 'attachment; filename="hoc-vien.csv"');
+            return res.type('text/csv; charset=utf-8').send(csv);
+        } catch (error: any) {
+            return res.status(error.statusCode || 500).json({ success: false,
+                message: error.statusCode ? error.message : 'Không xuất được danh sách học viên. Vui lòng thử lại.' });
+        }
+    }
+
     async getStudents(req: Request, res: Response) {
         try {
-            const page = parseInt(req.query.page as string) || 1;
-            const limit = parseInt(req.query.limit as string) || 10;
-            const search = req.query.search as string;
-            const status = req.query.status as StudentStatus;
-            const class_id = req.query.class_id ? parseInt(req.query.class_id as string) : undefined;
-            
-            let has_debt: boolean | undefined = undefined;
-            if (req.query.has_debt === 'true') has_debt = true;
-            if (req.query.has_debt === 'false') has_debt = false;
-
-            const result = await studentService.getStudents({ page, limit, search, status, class_id, has_debt });
+            const query = studentListQuery.safeParse(req.query);
+            if (!query.success) return res.status(400).json({ success: false, message: 'Bộ lọc hoặc phân trang học viên không hợp lệ.' });
+            const result = await studentService.getStudents(query.data, req.user!);
 
             return res.status(200).json({
                 success: true,
@@ -43,7 +99,7 @@ export class StudentController {
                 });
             }
 
-            const studentData = await studentService.getStudentById(Number(id));
+            const studentData = await studentService.getStudentById(Number(id), req.user!);
 
             if (!studentData) {
                 return res.status(404).json({

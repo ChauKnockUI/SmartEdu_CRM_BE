@@ -71,7 +71,7 @@ export class RoomController {
         try {
             const { start_date, end_date, schedule_days, schedule_time, class_id } = req.query;
 
-            if (!start_date || !end_date || !schedule_days || !schedule_time) {
+            if (class_id === undefined && (!start_date || !end_date || !schedule_days || !schedule_time)) {
                 return res.status(400).json({
                     success: false,
                     message: 'Thiếu các tham số bắt buộc: start_date, end_date, schedule_days, schedule_time'
@@ -79,28 +79,28 @@ export class RoomController {
             }
 
             // Parse schedule_days: "1,3,5" -> [1, 3, 5]
-            const daysArray = parseScheduleDays(schedule_days);
+            const daysArray = class_id !== undefined ? [] : parseScheduleDays(schedule_days);
             if (!daysArray) {
                 return res.status(400).json({ success: false, message: 'schedule_days không hợp lệ' });
             }
 
             // Parse schedule_time: "18:00,20:00" -> ["18:00", "20:00"]
-            const timeArray = parseScheduleTime(schedule_time);
+            const timeArray = class_id !== undefined ? [] : parseScheduleTime(schedule_time);
             if (!timeArray) {
                 return res.status(400).json({ success: false, message: 'schedule_time không hợp lệ (cần 2 giờ)' });
             }
 
-            const excludeClassId = class_id ? Number(class_id) : undefined;
-            if (excludeClassId !== undefined && isNaN(excludeClassId)) {
-                return res.status(400).json({ success: false, message: 'class_id khÃ´ng há»£p lá»‡' });
+            const excludeClassId = class_id !== undefined ? Number(class_id) : undefined;
+            if (excludeClassId !== undefined && (!Number.isInteger(excludeClassId) || excludeClassId <= 0 || excludeClassId > 2147483647)) {
+                return res.status(400).json({ success: false, message: 'ID lớp không hợp lệ.' });
             }
 
             const availableRooms = await classService.getAvailableRooms(
-                new Date(start_date as string),
-                new Date(end_date as string),
+                new Date((start_date as string) || '1970-01-01'),
+                new Date((end_date as string) || '1970-01-01'),
                 daysArray,
                 timeArray,
-                excludeClassId
+                excludeClassId, req.user
             );
 
             return res.status(200).json({

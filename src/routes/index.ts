@@ -14,6 +14,9 @@ import assignmentRouter from './assignment.routes';
 import dashboardRouter from './dashboard.routes';
 import userRouter from './user.routes';
 import notificationRouter from './notification.routes';
+import settingsRouter from './settings.routes';
+import { authenticate } from '../middlewares/auth.middleware';
+import { synchronizeClassStatuses } from '../middlewares/classStatus.middleware';
 
 const router = Router();
 
@@ -24,9 +27,13 @@ router.get('/', (_req, res) => {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 router.use('/auth', authRouter);
+// Verify the JWT/tenant before maintenance. Each router retains its own role checks.
+router.use(['/dashboard', '/leads', '/courses', '/rooms', '/classes', '/teachers', '/students',
+  '/schedules', '/attendance', '/invoices', '/finance', '/assignments'], authenticate, synchronizeClassStatuses);
 router.use('/dashboard', dashboardRouter);
 router.use('/users', userRouter);
 router.use('/notifications', notificationRouter);
+router.use('/settings', settingsRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);

@@ -5,6 +5,7 @@ dist/
 .DS_Store
 *.log
 coverage/
+certs/local-*.pem
 .nyc_output/
 .idea/
 .vscode/
@@ -16,3 +17,9 @@ coverage/
 
 # Config with credentials (dùng .env thay thế)
 config/
+
+# Runtime config contains environment-variable reads, not credentials.
+!src/config/
+src/config/*
+!src/config/env.ts
+!src/config/supabase.ts

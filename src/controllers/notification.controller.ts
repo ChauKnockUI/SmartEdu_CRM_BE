@@ -14,7 +14,7 @@ export class NotificationController {
             }
 
             const limit = req.query.limit ? Number(req.query.limit) : 30;
-            const result = await notificationService.getForUser(user_id, limit);
+            const result = await notificationService.getForUser(req.user!, limit);
 
             return res.status(200).json({
                 success: true,
@@ -23,7 +23,7 @@ export class NotificationController {
             });
         } catch (error: any) {
             console.error('[NotificationController] getMyNotifications error:', error);
-            return res.status(500).json({ success: false, message: error.message });
+            return res.status(error.statusCode || 500).json({ success: false, message: error.statusCode ? error.message : 'Không tải được thông báo.' });
         }
     }
 
@@ -44,9 +44,9 @@ export class NotificationController {
                 return res.status(400).json({ success: false, message: 'ID thông báo không hợp lệ' });
             }
 
-            await notificationService.markAsRead(id, user_id);
+            const result = await notificationService.markAsRead(id, user_id);
 
-            return res.status(200).json({ success: true, message: 'Đã đánh dấu đọc' });
+            return res.status(200).json({ success: true, message: 'Đã đánh dấu đọc', ...result });
         } catch (error: any) {
             console.error('[NotificationController] markAsRead error:', error);
             return res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -85,6 +85,7 @@ export class NotificationController {
             }
 
             const result = await notificationService.remindAttendance(scheduleId);
+            if (result.duplicate) return res.json({ success: true, message: result.reason, data: result });
             if (!result.sent) {
                 return res.status(400).json({
                     success: false,
@@ -115,7 +116,7 @@ export class NotificationController {
             const result = await notificationService.remindAllOverdue();
             return res.status(200).json({
                 success: true,
-                message: `Đã xử lý nhắc điểm danh: gửi ${result.sent} thông báo, bỏ qua ${result.skipped}`,
+                message: `Đã xử lý nhắc điểm danh: gửi ${result.sent} thông báo, bỏ qua ${result.skipped}${result.remaining ? `; còn ${result.remaining} buổi chưa quét trong lượt này` : ''}`,
                 data: result,
             });
         } catch (error: any) {

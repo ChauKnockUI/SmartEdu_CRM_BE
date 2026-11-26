@@ -14,6 +14,21 @@ const sendError = (res: Response, error: any) => {
 };
 
 export const invoiceController = {
+  async getInvoiceById(req: Request, res: Response) {
+    try { res.json({ success: true, data: await invoiceService.getInvoiceById(Number(req.params.id), req.user!) }); }
+    catch (error) { sendError(res, error); }
+  },
+
+  async getReceipt(req: Request, res: Response) {
+    try { res.json({ success: true, data: await invoiceService.getReceipt(Number(req.params.id), Number(req.params.receiptId), req.user!) }); }
+    catch (error) { sendError(res, error); }
+  },
+
+  async cancelInvoice(req: Request, res: Response) {
+    try { res.json({ success: true, data: await invoiceService.cancelInvoice(Number(req.params.id), req.body.notes, req.user!) }); }
+    catch (error) { sendError(res, error); }
+  },
+
   async getInvoices(req: Request, res: Response) {
     try {
       const result = await invoiceService.getInvoices({
@@ -22,7 +37,8 @@ export const invoiceController = {
         student_id: parseNumber(req.query.student_id),
         class_id: parseNumber(req.query.class_id),
         status: req.query.status as InvoiceStatus | undefined,
-      });
+        invoice_id: parseNumber(req.query.invoice_id),
+      }, req.user!);
       res.json({ success: true, ...result });
     } catch (error) {
       sendError(res, error);
@@ -34,12 +50,12 @@ export const invoiceController = {
       const data = await invoiceService.createInvoice({
         student_id: Number(req.body.student_id),
         class_id: parseNumber(req.body.class_id),
-        total_amount: parseNumber(req.body.total_amount),
-        discount_amount: parseNumber(req.body.discount_amount),
+        total_amount: req.body.total_amount,
+        discount_amount: req.body.discount_amount,
         due_date: parseDate(req.body.due_date),
         notes: req.body.notes,
-        items: req.body.items || [],
-      });
+        items: req.body.items ?? [],
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -52,10 +68,10 @@ export const invoiceController = {
         class_id: Number(req.body.class_id),
         student_id: Number(req.body.student_id),
         due_date: parseDate(req.body.due_date),
-        discount_amount: parseNumber(req.body.discount_amount),
+        discount_amount: req.body.discount_amount,
         notes: req.body.notes,
-        extra_items: req.body.extra_items || [],
-      });
+        extra_items: req.body.extra_items ?? [],
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -68,10 +84,10 @@ export const invoiceController = {
         class_id: Number(req.body.class_id),
         student_ids: Array.isArray(req.body.student_ids) ? req.body.student_ids.map(Number) : undefined,
         due_date: parseDate(req.body.due_date),
-        discount_amount: parseNumber(req.body.discount_amount),
+        discount_amount: req.body.discount_amount,
         notes: req.body.notes,
-        extra_items: req.body.extra_items || [],
-      });
+        extra_items: req.body.extra_items ?? [],
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -81,13 +97,13 @@ export const invoiceController = {
   async recordPayment(req: Request, res: Response) {
     try {
       const data = await invoiceService.recordPayment(Number(req.params.id), {
-        amount: Number(req.body.amount),
+        amount: req.body.amount,
         method: req.body.method as PaymentMethod | undefined,
         paid_at: parseDate(req.body.paid_at),
         reference_code: req.body.reference_code,
         received_by: req.user?.userId,
         notes: req.body.notes,
-      });
+      }, req.user!);
       res.status(201).json({ success: true, data });
     } catch (error) {
       sendError(res, error);
@@ -96,7 +112,8 @@ export const invoiceController = {
 
   async getStudentInvoices(req: Request, res: Response) {
     try {
-      const result = await invoiceService.getInvoices({ student_id: Number(req.params.id), page: 1, limit: 100 });
+      const result = await invoiceService.getInvoices({ student_id: Number(req.params.id),
+        page: parseNumber(req.query.page) || 1, limit: parseNumber(req.query.limit) || 100 }, req.user!);
       res.json({ success: true, ...result });
     } catch (error) {
       sendError(res, error);

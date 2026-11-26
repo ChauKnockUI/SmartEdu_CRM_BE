@@ -1,7 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { prisma } from '../database/db';
+import { prisma, withTenantTx } from '../database/db';
 import { attendanceService } from '../services/attendance.service';
-import { AttendanceInput } from '../services/attendance.service';
+import { attendanceAccess } from '../utils/attendanceAccess';
+import { notificationService } from '../services/notification.service';
+import { archiveUnlockNotifications } from '../utils/scheduleNotifications';
 
 export class AttendanceController {
   /**
@@ -58,7 +60,7 @@ export class AttendanceController {
 
   /**
    * GET /attendance/sessions/:id/absences
-   * Get absence list (absent & late students) for a session
+   * Get absence list (absent, late and excused students) for a session
    */
   async getAbsenceList(req: Request, res: Response) {
     try {
@@ -253,14 +255,22 @@ export class AttendanceController {
 
   toggleUnlockAttendance = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const scheduleId = parseInt(req.params.id, 10);
-      const { unlock } = req.body; // true: mở, false: khóa
-      const updated = await prisma.schedule.update({
-        where: { id: scheduleId },
-        data: {
-          is_attendance_unlocked: unlock !== undefined ? Boolean(unlock) : true,
-          attendance_unlocked_at: unlock !== false ? new Date() : null,
-        },
+      const scheduleId = Number(req.params.id);
+      const { unlock } = req.body;
+      if (!Number.isInteger(scheduleId) || scheduleId <= 0 || scheduleId > 2147483647 || typeof unlock !== 'boolean')
+        return res.status(400).json({ success: false, message: 'ID buổi học và trạng thái mở khóa không hợp lệ.' });
+      const updated = await withTenantTx(async tx => {
+        await tx.$queryRaw`SELECT id FROM schedules WHERE id = ${scheduleId} FOR UPDATE`;
+        const schedule = await tx.schedule.findUnique({ where: { id: scheduleId }, include: { class: { select: { status: true } } } });
+        if (!schedule) throw Object.assign(new Error('Buổi học không tồn tại.'), { statusCode: 404 });
+        const access = attendanceAccess(schedule, req.user!.userId, 'admin');
+        if (unlock && (access.cancelled || !access.timeLocked)) throw Object.assign(new Error(access.cancelled
+          ? 'Buổi học đã hủy.' : 'Buổi học chưa bị khóa sau 48 giờ.'), { statusCode: 400 });
+        const result = await tx.schedule.update({ where: { id: scheduleId }, data: {
+          is_attendance_unlocked: unlock, attendance_unlocked_at: unlock ? new Date() : null,
+        } });
+        if (unlock) await archiveUnlockNotifications(tx, scheduleId);
+        return result;
       });
       return res.status(200).json({
         success: true,
@@ -269,48 +279,22 @@ export class AttendanceController {
           : 'Đã khóa lại quyền điểm danh.',
         data: updated,
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
       next(error);
     }
   };
 
   requestUnlockAttendance = async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const scheduleId = parseInt(req.params.id, 10);
-      const teacherName = (req as any).user?.name || 'Giảng viên';
-      const schedule = await prisma.schedule.findUnique({
-        where: { id: scheduleId },
-        include: { class: true },
-      });
-      if (!schedule) {
-        return res.status(404).json({ success: false, message: 'Buổi học không tồn tại' });
-      }
-      // Tìm tất cả các tài khoản Admin trong hệ thống để gửi thông báo
-      const admins = await prisma.user.findMany({
-        where: { role: 'admin' },
-        select: { id: true },
-      });
-      const className = schedule.class?.name || 'Lớp học';
-      const scheduleDate = new Date(schedule.date).toLocaleDateString('vi-VN');
-      // Tạo thông báo cho từng Admin
-      const notifPromises = admins.map((admin) =>
-        prisma.notification.create({
-          data: {
-            user_id: admin.id,
-            type: 'attendance_reminder', // hoặc loại notif chung
-            title: `🔔 Yêu cầu mở điểm danh: ${className}`,
-            message: `${teacherName} đã gửi yêu cầu mở khóa điểm danh cho buổi học ngày ${scheduleDate} (Lớp: ${className}).`,
-            link: `/lms/sessions/${scheduleId}`,
-            metadata: { scheduleId },
-          },
-        })
-      );
-      await Promise.all(notifPromises);
+      const scheduleId = Number(req.params.id);
+      const result = await notificationService.requestAttendanceUnlock(scheduleId, req.user!);
       return res.status(200).json({
         success: true,
-        message: 'Đã gửi yêu cầu mở khóa điểm danh đến Quản trị viên.',
+        message: result.duplicate ? 'Yêu cầu mở điểm danh đã được gửi trong 24 giờ qua.' : 'Đã gửi yêu cầu mở khóa điểm danh đến Quản trị viên.',
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
       next(error);
     }
   };

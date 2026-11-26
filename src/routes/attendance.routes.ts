@@ -15,7 +15,7 @@ router.use(authenticate);
 // Người dùng: Admin, Giáo viên, Học viên (nếu tham gia lớp)
 router.get('/sessions/:id', attendanceController.getSessionAttendance);
 
-// GET /attendance/sessions/:id/absences - Xem danh sách học viên vắng/trễ
+// GET /attendance/sessions/:id/absences - Xem học viên vắng (có/không phép) và đi muộn
 // Người dùng: Admin, Giáo viên, Học viên (nếu tham gia lớp)
 router.get('/sessions/:id/absences', attendanceController.getAbsenceList);
 
@@ -34,13 +34,6 @@ router.patch(
   attendanceController.toggleUnlockAttendance
 );
 // POST /attendance/sessions/:id/request-unlock - Giáo viên gửi yêu cầu mở khóa điểm danh
-router.post(
-  '/sessions/:id/request-unlock',
-  authorize('teacher'),
-  attendanceController.requestUnlockAttendance
-);
-
-// Giáo viên gửi yêu cầu mở khóa điểm danh
 router.post(
   '/sessions/:id/request-unlock',
   authorize('teacher'),

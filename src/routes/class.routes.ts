@@ -10,9 +10,11 @@ router.use(authenticate);
 
 // Lấy danh sách lớp học (có phân trang, search, filter status, course, teacher)
 router.get('/', classController.getClasses);
+router.get('/filter-options', classController.getFilterOptions);
 
 // Lấy danh sách lớp của tôi
 router.get('/my/classes', classController.getMyClasses);
+router.get('/dropout-alerts', authorize('admin', 'teacher'), classController.getDropoutAlerts);
 // Lấy chi tiết lớp học
 router.get('/:id', classController.getClassById);
 
@@ -30,10 +32,10 @@ router.post('/', authorize('admin'), classController.createClass);
 router.put('/:id', authorize('admin'), classController.updateClass);
 
 //Kiểm tra xung đột lịch học của học viên trước
-router.post('/:id/check-conflicts', authorize('admin', 'sale'), classController.checkStudentConflicts);
+router.post('/:id/check-conflicts', authorize('admin'), classController.checkStudentConflicts);
 
 // Ghi danh học viên vào lớp (Academic Enrollment)
-router.post('/:id/enroll', authorize('admin', 'sale'), classController.enrollStudent);
+router.post('/:id/enroll', authorize('admin'), classController.enrollStudent);
 
 // Hủy ghi danh học viên khỏi lớp
 router.delete('/:id/enroll/:studentId', authorize('admin'), classController.unenrollStudent);
