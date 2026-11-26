@@ -14,6 +14,7 @@ import assignmentRouter from './assignment.routes';
 import dashboardRouter from './dashboard.routes';
 import userRouter from './user.routes';
 import notificationRouter from './notification.routes';
+import settingsRouter from './settings.routes';
 import { authenticate } from '../middlewares/auth.middleware';
 import { synchronizeClassStatuses } from '../middlewares/classStatus.middleware';
 
@@ -32,6 +33,7 @@ router.use(['/dashboard', '/leads', '/courses', '/rooms', '/classes', '/teachers
 router.use('/dashboard', dashboardRouter);
 router.use('/users', userRouter);
 router.use('/notifications', notificationRouter);
+router.use('/settings', settingsRouter);
 
 // ─── Leads ────────────────────────────────────────────────────────────────────
 router.use('/leads', leadRouter);

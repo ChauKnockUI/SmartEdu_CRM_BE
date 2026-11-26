@@ -5,6 +5,7 @@ dist/
 .DS_Store
 *.log
 coverage/
+certs/local-*.pem
 .nyc_output/
 .idea/
 .vscode/

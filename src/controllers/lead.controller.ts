@@ -8,9 +8,10 @@ import { leadEmailService } from '../services/leadEmail.service';
 import { LEAD_CARE_FILTERS, type LeadCareFilter } from '../constants/leadWorkflow';
 
 export class LeadController {
-    getEmailConfiguration(_req: Request, res: Response) {
+    async getEmailConfiguration(_req: Request, res: Response) {
         res.setHeader('Cache-Control', 'no-store');
-        return res.json({ success: true, data: leadEmailService.getConfiguration() });
+        try { return res.json({ success: true, data: await leadEmailService.getConfiguration() }); }
+        catch { return res.status(503).json({ success: false, message: 'Chưa đọc được cấu hình email của trung tâm. Vui lòng liên hệ quản trị viên.' }); }
     }
 
     async sendEmail(req: Request, res: Response) {
@@ -21,6 +22,7 @@ export class LeadController {
                 : 'Dịch vụ đã tiếp nhận email nhưng chưa lưu được lịch sử. Vui lòng kiểm tra dịch vụ email trước khi gửi lại.' });
         } catch (error: any) {
             return res.status(error.statusCode || 500).json({ success: false,
+                delivery_unknown: error.deliveryUnknown === true,
                 message: error.statusCode ? error.message : 'Chưa xử lý được yêu cầu gửi email. Vui lòng thử lại cùng nội dung.' });
         }
     }

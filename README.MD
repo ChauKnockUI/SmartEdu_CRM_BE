@@ -9,29 +9,55 @@ npm i -D @types/multer
 
 ## Gửi email cho Lead
 
-Trang chi tiết Lead có nút **Soạn email**. BE gửi văn bản thuần qua Resend API;
-chỉ Admin hoặc Sale đang phụ trách Lead được gửi. Không có thư viện hoặc migration mới.
+Trang chi tiết Lead có nút **Soạn email**. BE gửi văn bản thuần qua Gmail SMTP
+bằng Nodemailer; chỉ Admin hoặc Sale đang phụ trách Lead được gửi. Mỗi trung tâm
+lưu Gmail và Mật khẩu ứng dụng riêng, không lấy địa chỉ người gửi từ yêu cầu của Sale.
 
-1. Tạo API key gửi email trong Resend và xác minh tên miền gửi:
-   https://resend.com/docs/dashboard/domains/introduction
-2. Đặt các biến sau trong `.env` **của BE**, rồi khởi động lại BE:
+Triển khai lần đầu:
 
-```env
-RESEND_API_KEY=your-resend-api-key
-LEAD_EMAIL_FROM="Tên trung tâm <tuvan@your-verified-domain.vn>"
-LEAD_EMAIL_REPLY_TO=tuvan@your-verified-domain.vn
-```
+1. Áp dụng migration `20261125120000_tenant_email_settings`, rồi tạo Prisma Client:
+   `npm run db:migrate:deploy` và `npm run db:generate`.
+2. Tạo khóa mã hóa máy chủ bằng `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+   Lưu kết quả vào `.env` của BE dưới tên `EMAIL_SETTINGS_ENCRYPTION_KEY`, khởi động lại BE.
+   Giữ khóa ổn định và sao lưu riêng; không commit `.env`. Khi đổi khóa này phải nhập lại
+   Mật khẩu ứng dụng của các trung tâm hoặc thực hiện quy trình mã hóa lại trước đó.
+3. Admin trung tâm mở **Cài đặt trung tâm → Email chăm sóc**, nhập tên hiển thị,
+   Gmail gửi và Mật khẩu ứng dụng 16 ký tự do Google cấp sau khi bật Xác minh 2 bước.
+   Chọn **Kiểm tra và lưu**. Lần chỉnh sửa sau có thể để trống mật khẩu để giữ giá trị cũ.
+   Khoảng trắng trong mật khẩu sao chép được tự loại bỏ. Không dùng mật khẩu đăng nhập Google.
+   Nếu bảng cấu hình đã được tạo ở bước trước thì chuyển sang Gmail không cần migration mới.
 
-`LEAD_EMAIL_REPLY_TO` có thể để trống. Cấu hình này dùng chung cho các tenant chạy
-trên cùng BE; chưa có màn hình quản lý hộp thư riêng cho từng trung tâm.
-Không đặt khóa API trong FE hoặc commit `.env`.
+`GET/PUT /api/settings/email` chỉ cho Admin, có RLS theo tenant; PUT từ chối trường
+ngoài hợp đồng và cấu hình cũ đã bị người khác cập nhật. PUT nhận `sender_name`,
+`sender_email`, `app_password` (có thể bỏ qua nếu đã lưu), `updated_at`.
+Kiểm tra dùng `transport.verify()` tới `smtp.gmail.com:587` với STARTTLS bắt buộc, xác thực bằng
+chính Gmail gửi; không gửi email thử. Thành công xác nhận đăng nhập SMTP, không thay
+thế kết quả gửi thực tế hoặc xác nhận tài khoản còn hạn mức. Máy chủ/cổng được cố định ở BE.
 
-`GET /api/leads/email-config` chỉ trả trạng thái sẵn sàng và địa chỉ gửi.
+Nếu phần mềm bảo vệ mạng của máy chủ kiểm tra SMTP TLS, cấu hình `GMAIL_SMTP_CA_FILE`
+trong `.env` trỏ tới PEM của CA đã được tin cậy trên máy. Ví dụ máy dev hiện tại dùng
+`certs/local-mail-ca.pem` xuất từ Avast Web/Mail Shield Root trong Windows Trusted Root.
+File cục bộ được gitignore; máy chủ khác có thể để trống biến này khi dùng chuỗi CA công khai.
+Không thêm chứng chỉ có tên **Untrusted Root**, không tắt xác minh TLS. Lỗi chứng chỉ
+được báo riêng với lỗi đăng nhập; cần khởi động lại BE khi sửa `.env`.
+
+Mật khẩu được mã hóa AES-256-GCM với dữ liệu xác thực gắn tenant; API chỉ trả
+`has_password`, không trả mật khẩu gốc hoặc ciphertext. Thiếu khóa mã hóa máy chủ
+sẽ chặn lưu/gửi, không làm dừng toàn bộ ứng dụng. Tái sử dụng cột `api_key_encrypted`
+để không sửa schema; ciphertext mới có tiền tố `gmail-v1`. Cấu hình Brevo cũ không
+được dùng làm mật khẩu Gmail; Admin cần nhập và kiểm tra Mật khẩu ứng dụng lần đầu.
+
+`GET /api/leads/email-config` chỉ trả trạng thái cấu hình và người gửi đã lưu.
 `POST /api/leads/:id/emails` nhận `to`, `subject`, `text`, `request_id` (UUID cho một bản soạn).
-Người nhận phải khớp email hiện tại của Lead. Khi lỗi mạng, gửi lại cùng nội dung và
-`request_id`: Resend chống gửi trùng trong 24 giờ; lịch sử đã lưu cũng được kiểm tra
-để tránh gửi/lưu lại. Không có bảo đảm chống trùng lâu dài nếu dịch vụ đã nhận email
-nhưng DB lỗi và bản gửi được thử lại sau thời hạn đó.
+Người nhận phải khớp email hiện tại của Lead. Lịch sử đã lưu là kiểm tra bền vững
+cho cùng mã yêu cầu. Trong một tiến trình BE, các lần gọi cùng mã/nội dung dùng chung
+kết quả SMTP trong 30 phút, giới hạn 1.000 mã, gồm cả lỗi chưa rõ kết quả.
+`Message-ID` xác định từ mã yêu cầu giúp đối chiếu thư, không phải bảo đảm chống trùng
+của Gmail. Không bảo đảm chống trùng giữa nhiều tiến trình hoặc sau khi khởi động lại
+nếu Gmail đã nhận nhưng chưa lưu được lịch sử. Không tự retry SMTP khi chưa rõ kết quả.
+API trả `delivery_unknown=true` nếu lỗi có thể xảy ra sau DATA; FE cũng xử lý mất phản
+hồi HTTP như kết quả chưa xác định. Nút gửi bị khóa tới khi người dùng xác nhận đã
+kiểm tra mục **Đã gửi** trong Gmail; lần gửi chủ động sau đó dùng mã yêu cầu mới.
 
 Lịch sử chỉ được ghi sau khi dịch vụ chấp nhận email, với phản hồi khách là
 “Chưa có phản hồi”. “Dịch vụ đã tiếp nhận” chưa xác nhận phát thành công hoặc khách
@@ -40,7 +66,7 @@ cảnh báo kiểm tra dịch vụ trước khi gửi lại. Chưa có webhook t
 đồng bộ thư trả lời, tệp đính kèm hoặc gửi hàng loạt.
 
 Kiểm tra thủ công sau cấu hình: gửi một email đến địa chỉ thử nghiệm của bạn,
-đối chiếu hộp thư và trang Emails của Resend, rồi kiểm tra lịch sử Lead.
+đối chiếu hộp thư nhận, mục **Đã gửi** của Gmail trung tâm và lịch sử Lead.
 
 ## Danh sách và xuất CSV học viên
 

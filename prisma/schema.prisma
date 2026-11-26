@@ -808,10 +808,23 @@ model Tenant {
   leadAiScores          LeadAiScore[]
   class_materials       class_materials[]
   notifications         Notification[]
+  email_settings        TenantEmailSettings?
 
   @@index([plan_id])
   @@index([status])
   @@map("tenants")
+}
+
+model TenantEmailSettings {
+  tenant_id         Int      @id @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+  sender_name       String   @db.VarChar(100)
+  sender_email      String   @db.VarChar(255)
+  api_key_encrypted String   @db.Text
+  checked_at        DateTime @db.Timestamptz(6)
+  updated_at        DateTime @updatedAt @db.Timestamptz(6)
+  tenant            Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+
+  @@map("tenant_email_settings")
 }
 
 model TenantSubscription {
